@@ -167,6 +167,21 @@ export default function HookahAdmin() {
   const [pwdErr, setPwdErr] = useState("");
   const [fatal, setFatal] = useState("");
   useEffect(() => { const h = (e) => setFatal(String(e.message || e.reason || e)); window.addEventListener("error", h); window.addEventListener("unhandledrejection", h); return () => { window.removeEventListener("error", h); window.removeEventListener("unhandledrejection", h); }; }, []);
+  const [installPrompt, setInstallPrompt] = useState(null);
+  const [installed, setInstalled] = useState(() => window.matchMedia?.("(display-mode: standalone)").matches || window.navigator.standalone === true);
+  const [howTo, setHowTo] = useState(false);
+  useEffect(() => {
+    const onPrompt = (e) => { e.preventDefault(); setInstallPrompt(e); };
+    const onDone = () => { setInstalled(true); setInstallPrompt(null); setHowTo(false); };
+    window.addEventListener("beforeinstallprompt", onPrompt);
+    window.addEventListener("appinstalled", onDone);
+    return () => { window.removeEventListener("beforeinstallprompt", onPrompt); window.removeEventListener("appinstalled", onDone); };
+  }, []);
+  const install = async () => {
+    if (installPrompt) { installPrompt.prompt(); const r = await installPrompt.userChoice.catch(() => null); if (r?.outcome === "accepted") setInstalled(true); setInstallPrompt(null); return; }
+    setHowTo(true);
+  };
+
   const versionRef = useRef(0);
   const dirtyRef = useRef(false);
   const applyRef = useRef(false);
@@ -237,6 +252,10 @@ export default function HookahAdmin() {
     const st = document.createElement("style");
     st.textContent = CSS;
     document.head.appendChild(st);
+    const man = Object.assign(document.createElement("link"), { rel: "manifest", href: "/manifest.webmanifest" });
+    const ati = Object.assign(document.createElement("link"), { rel: "apple-touch-icon", href: "/icon-192.png" });
+    document.head.append(man, ati);
+    if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
     return () => { document.head.removeChild(l); document.head.removeChild(st); };
   }, []);
 
@@ -278,6 +297,11 @@ export default function HookahAdmin() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+        {!installed && (
+          <button onClick={install} className="glass" style={{ height: 42, borderRadius: 14, padding: "0 14px", cursor: "pointer", fontSize: 13.5, fontWeight: 600, fontFamily: "inherit", color: PAL.ink, display: "flex", alignItems: "center", gap: 7 }}>
+            <span style={{ fontSize: 15 }}>⤓</span> Установить
+          </button>
+        )}
         <button onClick={() => setDark((d) => !d)} title="Переключить тему" aria-label="Переключить тему"
           className="glass" style={{ width: 42, height: 42, borderRadius: 14, cursor: "pointer", fontSize: 17, display: "grid", placeItems: "center", color: PAL.ink }}>
           {dark ? "☀" : "☾"}
@@ -303,6 +327,24 @@ export default function HookahAdmin() {
           : <StaffView employees={employees} setEmployees={setEmployees} shifts={shifts} setShifts={setShifts} setToast={setToast}
               daily={daily} setDaily={setDaily} requests={requests} setRequests={setRequests} />}
       </main>
+
+      {howTo && (
+        <div onClick={() => setHowTo(false)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(4,20,16,.45)", backdropFilter: "blur(6px)", display: "grid", placeItems: "center", padding: 20 }}>
+          <div className="glass" onClick={(e) => e.stopPropagation()} style={{ borderRadius: 24, padding: 26, maxWidth: 380, color: PAL.ink }}>
+            <div style={{ fontSize: 19, fontWeight: 650, marginBottom: 10 }}>Установить на телефон</div>
+            {/iPhone|iPad|iPod/.test(navigator.userAgent) ? (
+              <div style={{ fontSize: 14, lineHeight: 1.55, color: PAL.ink }}>
+                Открой этот сайт в Safari, нажми кнопку «Поделиться» внизу экрана, пролистай список и выбери «На экран „Домой“». Значок мяты появится рядом с остальными приложениями.
+              </div>
+            ) : (
+              <div style={{ fontSize: 14, lineHeight: 1.55, color: PAL.ink }}>
+                Открой меню браузера (три точки) и выбери «Установить приложение» или «Добавить на главный экран». Панель откроется в отдельном окне, без адресной строки.
+              </div>
+            )}
+            <div style={{ marginTop: 16 }}><Btn onClick={() => setHowTo(false)}>Понятно</Btn></div>
+          </div>
+        </div>
+      )}
 
       {toast && (
         <div style={{ position: "fixed", bottom: 26, left: "50%", transform: "translateX(-50%)", background: PAL.solid, color: PAL.panelText, padding: "11px 20px", borderRadius: 999, fontWeight: 600, fontSize: 14, boxShadow: "0 12px 40px rgba(0,0,0,.3)", border: "1px solid rgba(255,255,255,.12)", zIndex: 50 }}>{toast}</div>
