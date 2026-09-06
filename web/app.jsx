@@ -747,6 +747,23 @@ const INV_KIND = { mid: "Промежуточная", main: "Основная" }
 const DEVIATION = 800; // допустимое отклонение, г
 const GRAMS_PER_BOWL = 22; // средняя граммовка кальяна для прогноза
 
+function QtyTable({ q, onChange, color }) {
+  return (
+    <div className="flex flex-col gap-2" style={{ marginTop: 10 }}>
+      {BOWLS.map(([k, name, g]) => (
+        <div key={k} className="flex items-center gap-2">
+          <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{name}<span style={{ fontWeight: 600, fontSize: 12, color: PAL.mute }}> · {g} г</span></div>
+          <input type="number" min={0} value={q[k] ?? ""} placeholder="0" onChange={(e) => onChange({ ...q, [k]: e.target.value })}
+            style={{ ...STY.input, width: 84, textAlign: "center", fontWeight: 800 }} />
+          <div style={{ width: 76, textAlign: "right", fontSize: 13, color: (Number(q[k]) || 0) ? color : PAL.mute, fontWeight: 700 }}>
+            {(Number(q[k]) || 0) * g || 0} г
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInventories }) {
   const [range, setRange] = useState(14);
   const fileRef = useRef();
@@ -909,21 +926,6 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
   const td = { padding: "9px 8px", borderTop: `1px solid ${PAL.line}`, fontSize: 14, verticalAlign: "middle" };
   const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const label = { fontSize: 11, color: PAL.mute, marginBottom: 3 };
-
-  const QtyTable = ({ q, onChange, color }) => (
-    <div className="flex flex-col gap-2" style={{ marginTop: 10 }}>
-      {BOWLS.map(([k, name, g]) => (
-        <div key={k} className="flex items-center gap-2">
-          <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{name}<span style={{ fontWeight: 600, fontSize: 12, color: PAL.mute }}> · {g} г</span></div>
-          <input type="number" min={0} value={q[k] ?? ""} placeholder="0" onChange={(e) => onChange({ ...q, [k]: e.target.value })}
-            style={{ ...STY.input, width: 80, textAlign: "center", fontWeight: 800 }} />
-          <div style={{ width: 76, textAlign: "right", fontSize: 13, color: (Number(q[k]) || 0) ? color : PAL.mute, fontWeight: 700 }}>
-            {(Number(q[k]) || 0) * g || 0} г
-          </div>
-        </div>
-      ))}
-    </div>
-  );
 
   return (
     <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
