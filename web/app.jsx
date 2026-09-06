@@ -96,6 +96,7 @@ export default function HookahAdmin() {
   const [bowlGrams, setBowlGrams] = useState({ regular: 22, premium: 30, electro: 0 });
   const [daily, setDaily] = useState({}); // "дата|смена" → { cash, hookahs }
   const [inventories, setInventories] = useState([]);
+  const [requests, setRequests] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [pwd, setPwd] = useState("");
@@ -119,6 +120,7 @@ export default function HookahAdmin() {
     setLedger(s.ledger || []);
     setDaily(s.daily || {});
     setInventories(s.inventories || []);
+    setRequests(s.requests || []);
     setTimeout(() => { applyRef.current = false; }, 0);
   };
   const load = async () => {
@@ -134,7 +136,7 @@ export default function HookahAdmin() {
     dirtyRef.current = true;
     const t = setTimeout(async () => {
       try {
-        const s = await api("PUT", "/api/state", { version: versionRef.current, employees, roster: shifts, prices, bowlGrams, shift, closedShifts, ledger, daily, inventories });
+        const s = await api("PUT", "/api/state", { version: versionRef.current, employees, roster: shifts, prices, bowlGrams, shift, closedShifts, ledger, daily, inventories, requests });
         versionRef.current = s.version; dirtyRef.current = false;
       } catch (e) {
         if (e.status === 409 && e.data) { applyState(e.data); setToast("Данные обновились из бота"); dirtyRef.current = false; }
@@ -142,7 +144,7 @@ export default function HookahAdmin() {
       }
     }, 600);
     return () => clearTimeout(t);
-  }, [employees, shifts, prices, bowlGrams, shift, closedShifts, ledger, daily, inventories]);
+  }, [employees, shifts, prices, bowlGrams, shift, closedShifts, ledger, daily, inventories, requests]);
 
   // подхватывать изменения из бота
   useEffect(() => {
@@ -219,7 +221,7 @@ export default function HookahAdmin() {
         {view === "tobacco"
           ? <TobaccoView setToast={setToast} ledger={ledger} setLedger={setLedger} daily={daily} inventories={inventories} setInventories={setInventories} />
           : <StaffView employees={employees} setEmployees={setEmployees} shifts={shifts} setShifts={setShifts} setToast={setToast}
-              daily={daily} setDaily={setDaily} closedShifts={closedShifts} />}
+              daily={daily} setDaily={setDaily} requests={requests} setRequests={setRequests} />}
       </main>
 
       {toast && (
@@ -291,8 +293,8 @@ function Heatmap({ shifts, empById, weeks = 4 }) {
   );
 }
 
-// ---------- ввод кассы и кальянов за смену ----------
-function ShiftEntry({ day, kind, emp, employees, onEmp, rec, onSave, setToast }) {
+// ---------- общая касса и кальяны за день ----------
+function DayTotals({ rec, onSave, setToast, compact }) {
   const [edit, setEdit] = useState(false);
   const [cash, setCash] = useState("");
   const [hk, setHk] = useState("");
@@ -301,10 +303,35 @@ function ShiftEntry({ day, kind, emp, employees, onEmp, rec, onSave, setToast })
   const save = () => {
     const c = Number(cash) || 0, h = Number(hk) || 0;
     if (!c && !h) return;
-    onSave({ cash: c, hookahs: h }); setEdit(false); setToast("Записано");
+    onSave({ cash: c, hookahs: h }); setEdit(false); setToast && setToast("Записано");
   };
+  if (filled && !edit) return (
+    <div className="flex items-center gap-4 flex-wrap">
+      <div><div style={{ fontSize: 11, color: PAL.mute }}>касса за день</div><div style={{ fontSize: compact ? 18 : 30, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(rec.cash)}</div></div>
+      <div><div style={{ fontSize: 11, color: PAL.mute }}>кальянов</div><div style={{ fontSize: compact ? 18 : 30, fontWeight: 800 }}>{rec.hookahs}</div></div>
+      <div style={{ marginLeft: "auto" }}><Btn small tone="ghost" onClick={() => setEdit(true)}>Изменить</Btn></div>
+    </div>
+  );
   return (
-    <div style={{ background: PAL.white, border: `1px solid ${PAL.line}`, borderRadius: 14, padding: 14, flex: "1 1 260px" }}>
+    <div className="flex items-end gap-2 flex-wrap">
+      <label style={{ flex: "1 1 130px" }}>
+        <div style={{ fontSize: 11, color: PAL.mute, marginBottom: 3 }}>общая касса, ₽</div>
+        <input type="number" inputMode="numeric" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="0" style={{ ...STY.input, fontWeight: 800 }} />
+      </label>
+      <label style={{ flex: "1 1 100px" }}>
+        <div style={{ fontSize: 11, color: PAL.mute, marginBottom: 3 }}>кальянов всего</div>
+        <input type="number" inputMode="numeric" value={hk} onChange={(e) => setHk(e.target.value)} placeholder="0" style={{ ...STY.input, fontWeight: 800 }} />
+      </label>
+      <Btn small={compact} onClick={save}>Сохранить</Btn>
+      {filled && <Btn small={compact} tone="ghost" onClick={() => setEdit(false)}>Отмена</Btn>}
+    </div>
+  );
+}
+
+// ---------- выбор сотрудника на смену ----------
+function ShiftPick({ day, kind, emp, employees, onEmp }) {
+  return (
+    <div style={{ background: PAL.white, border: `1px solid ${PAL.line}`, borderRadius: 14, padding: 12, flex: "1 1 220px" }}>
       <div className="flex items-center justify-between gap-2 mb-2">
         <div>
           <div style={{ fontWeight: 800, fontSize: 15 }}>{SHIFT_LABEL[kind]}</div>
@@ -312,36 +339,16 @@ function ShiftEntry({ day, kind, emp, employees, onEmp, rec, onSave, setToast })
         </div>
         {emp && <span style={{ width: 10, height: 10, borderRadius: 5, background: emp.color || PAL.mint }} />}
       </div>
-      <select value={emp?.id || ""} onChange={(e) => onEmp(e.target.value)} style={{ ...STY.input, fontWeight: 700, marginBottom: 10 }}>
+      <select value={emp?.id || ""} onChange={(e) => onEmp(e.target.value)} style={{ ...STY.input, fontWeight: 700 }}>
         <option value="">кто на смене…</option>
         {employees.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
       </select>
-      {filled && !edit ? (
-        <div className="flex items-center gap-4 flex-wrap">
-          <div><div style={{ fontSize: 11, color: PAL.mute }}>касса</div><div style={{ fontSize: 22, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(rec.cash)}</div></div>
-          <div><div style={{ fontSize: 11, color: PAL.mute }}>кальянов</div><div style={{ fontSize: 22, fontWeight: 800 }}>{rec.hookahs}</div></div>
-          <div style={{ marginLeft: "auto" }}><Btn small tone="ghost" onClick={() => setEdit(true)}>Изменить</Btn></div>
-        </div>
-      ) : (
-        <div className="flex items-end gap-2 flex-wrap">
-          <label style={{ flex: "1 1 110px" }}>
-            <div style={{ fontSize: 11, color: PAL.mute, marginBottom: 3 }}>касса, ₽</div>
-            <input type="number" inputMode="numeric" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="0" style={STY.input} />
-          </label>
-          <label style={{ flex: "1 1 90px" }}>
-            <div style={{ fontSize: 11, color: PAL.mute, marginBottom: 3 }}>кальянов</div>
-            <input type="number" inputMode="numeric" value={hk} onChange={(e) => setHk(e.target.value)} placeholder="0" style={STY.input} />
-          </label>
-          <Btn onClick={save}>Сохранить</Btn>
-          {filled && <Btn tone="ghost" onClick={() => setEdit(false)}>Отмена</Btn>}
-        </div>
-      )}
     </div>
   );
 }
 
 // ====================================================================
-function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily, setDaily }) {
+function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily, setDaily, requests, setRequests }) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [newName, setNewName] = useState("");
 
@@ -350,7 +357,6 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
   const SHIFTS = [["day", "1-я смена"], ["night", "2-я смена"]];
   const empById = Object.fromEntries(employees.map((e) => [e.id, e]));
   const setCell = (day, kind, empId) => setShifts((s) => ({ ...s, [dkey(day, kind)]: empId || undefined }));
-  const setRec = (day, kind, rec) => setDaily((d) => ({ ...d, [dkey(day, kind)]: rec }));
 
   const today = iso(TODAY), tomorrow = iso(addDays(TODAY, 1));
 
@@ -365,46 +371,70 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
   };
   const patchEmp = (id, patch) => setEmployees((es) => es.map((e) => (e.id === id ? { ...e, ...patch } : e)));
 
-  const records = useMemo(() => Object.entries(daily || {}).map(([k, v]) => {
-    const [day, kind] = k.split("|");
-    return { day, kind, emp: empById[shifts[k]], cash: Number(v?.cash) || 0, hookahs: Number(v?.hookahs) || 0 };
-  }).filter((r) => r.cash || r.hookahs), [daily, shifts, employees]);
+  // общая касса за день: ключ "дата|all"; старые записи по сменам суммируются
+  const totalOf = (day) => {
+    const all = (daily || {})[dkey(day, "all")];
+    if (all) return { cash: Number(all.cash) || 0, hookahs: Number(all.hookahs) || 0 };
+    const parts = ["day", "night"].map((k) => (daily || {})[dkey(day, k)]).filter(Boolean);
+    if (!parts.length) return null;
+    return { cash: parts.reduce((a, x) => a + (Number(x.cash) || 0), 0), hookahs: parts.reduce((a, x) => a + (Number(x.hookahs) || 0), 0) };
+  };
+  const setTotals = (day, rec) => setDaily((d) => {
+    const n = { ...d, [dkey(day, "all")]: rec };
+    delete n[dkey(day, "day")]; delete n[dkey(day, "night")];
+    return n;
+  });
+  const empsOf = (day) => ["day", "night"].map((k) => empById[shifts[dkey(day, k)]]).filter(Boolean);
+
+  // дни за последние 45 дней, где есть смены или касса
+  const dayList = useMemo(() => {
+    const out = [];
+    for (let i = 0; i < 45; i++) {
+      const d = addDays(TODAY, -i), day = iso(d);
+      const emps = empsOf(day), rec = totalOf(day);
+      if (!emps.length && !rec) continue;
+      const rate = emps.length ? emps.reduce((a, e) => a + (Number(e.rate) || 0), 0) / emps.length : 0;
+      out.push({ day, emps, cash: rec?.cash || 0, hookahs: rec?.hookahs || 0, filled: !!rec, pool: Math.round((rec?.cash || 0) * rate / 100) });
+    }
+    return out;
+  }, [daily, shifts, employees]);
 
   const month = TODAY.getMonth(), year = TODAY.getFullYear();
   const inMonth = (day) => { const d = new Date(day + "T12:00:00"); return d.getMonth() === month && d.getFullYear() === year; };
 
+  // зарплата: касса дня делится поровну между сотрудниками этого дня
   const salary = employees.map((e) => {
-    const mine = records.filter((r) => r.emp?.id === e.id && inMonth(r.day));
-    const cash = mine.reduce((a, r) => a + r.cash, 0);
+    const mine = dayList.filter((r) => inMonth(r.day) && r.emps.some((x) => x.id === e.id));
+    const base = mine.reduce((a, r) => a + (r.emps.length ? r.cash / r.emps.length : 0), 0);
     const rate = Number(e.rate) || 0;
-    return { id: e.id, name: e.name, color: e.color, rate, смен: mine.length, касса: cash, зп: Math.round(cash * rate / 100) };
+    return { id: e.id, name: e.name, color: e.color, rate, смен: mine.length, касса: Math.round(base), зп: Math.round(base * rate / 100) };
   });
 
   const perf = employees.map((e) => {
-    const mine = records.filter((r) => r.emp?.id === e.id);
-    return { name: e.name, color: e.color, смен: mine.length, "средняя касса": mine.length ? Math.round(mine.reduce((a, r) => a + r.cash, 0) / mine.length) : 0 };
+    const mine = dayList.filter((r) => r.filled && r.emps.some((x) => x.id === e.id));
+    const avg = mine.length ? Math.round(mine.reduce((a, r) => a + r.cash / r.emps.length, 0) / mine.length) : 0;
+    return { name: e.name, color: e.color, смен: mine.length, "средняя касса": avg };
   }).filter((p) => p.смен).sort((a, b) => b["средняя касса"] - a["средняя касса"]);
 
-  const byDay = useMemo(() => {
-    const keys = [...new Set(records.map((r) => r.day))].sort().reverse().slice(0, 30);
-    return keys.map((day) => {
-      const two = ["day", "night"].map((kind) => {
-        const rec = (daily || {})[dkey(day, kind)]; const emp = empById[shifts[dkey(day, kind)]];
-        return rec && (rec.cash || rec.hookahs) ? { kind, emp, cash: Number(rec.cash) || 0, hookahs: Number(rec.hookahs) || 0 } : null;
-      });
-      const cash = two.reduce((a, x) => a + (x?.cash || 0), 0);
-      const hookahs = two.reduce((a, x) => a + (x?.hookahs || 0), 0);
-      const pool = two.reduce((a, x) => a + (x ? x.cash * (Number(x.emp?.rate) || 0) / 100 : 0), 0);
-      return { day, two, cash, hookahs, pool: Math.round(pool), names: two.filter(Boolean).map((x) => x.emp?.name || "—") };
-    });
-  }, [records, daily, shifts, employees]);
+  const byDay = dayList;
 
-  const chart = [...byDay].slice(0, 14).reverse().map((r) => ({
-    label: fmtShort(new Date(r.day + "T12:00:00")),
-    "1-я смена": r.two[0]?.cash || 0, "2-я смена": r.two[1]?.cash || 0,
+  const chart = [...byDay].filter((r) => r.filled).slice(0, 14).reverse().map((r) => ({
+    label: fmtShort(new Date(r.day + "T12:00:00")), касса: r.cash,
   }));
 
-  const monthTot = records.filter((r) => inMonth(r.day)).reduce((a, r) => ({ cash: a.cash + r.cash, hk: a.hk + r.hookahs }), { cash: 0, hk: 0 });
+  const monthTot = byDay.filter((r) => inMonth(r.day)).reduce((a, r) => ({ cash: a.cash + r.cash, hk: a.hk + r.hookahs }), { cash: 0, hk: 0 });
+  const [editDay, setEditDay] = useState(null);
+  const pendingReqs = (requests || []).filter((r) => r.status === "new");
+  const decideReq = (r, ok) => {
+    if (ok) setShifts((sh) => {
+      const n = { ...sh };
+      (r.items || []).forEach((i) => { n[dkey(i.day, i.kind)] = r.empId; });
+      return n;
+    });
+    setRequests((L) => (L || []).map((x) => (x.id === r.id ? { ...x, status: ok ? "ok" : "no" } : x)));
+    setToast(ok ? `Смены ${r.name} одобрены` : `Заявка ${r.name} отклонена`);
+  };
+
   const isToday = (d) => iso(d) === today;
   const th = { padding: "8px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap" };
   const td = { padding: "8px", borderTop: `1px solid ${PAL.line}`, fontSize: 13 };
@@ -413,20 +443,42 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
   return (
     <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
       <Card style={{ gridColumn: "span 8" }} title={`Сегодня · ${DAYS_RU[(TODAY.getDay() + 6) % 7]}, ${fmtShort(TODAY)}`}
-        aside={<span style={{ fontSize: 12, color: PAL.mute }}>касса и кальяны за смену</span>}>
+        aside={<span style={{ fontSize: 12, color: PAL.mute }}>общая касса за день</span>}>
         <div className="flex gap-3 flex-wrap">
           {SHIFTS.map(([kind]) => (
-            <ShiftEntry key={kind} day={today} kind={kind} employees={employees} setToast={setToast}
-              emp={empById[shifts[dkey(today, kind)]]}
-              onEmp={(id) => setCell(today, kind, id)}
-              rec={(daily || {})[dkey(today, kind)]}
-              onSave={(rec) => setRec(today, kind, rec)} />
+            <ShiftPick key={kind} day={today} kind={kind} employees={employees}
+              emp={empById[shifts[dkey(today, kind)]]} onEmp={(id) => setCell(today, kind, id)} />
           ))}
         </div>
+
+        {/* заявки от сотрудников */}
+        {pendingReqs.length > 0 && (
+          <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 14, background: PAL.lowBg, border: `1px solid ${PAL.line}` }}>
+            <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>Ждут одобрения на смену · {pendingReqs.length}</div>
+            <div className="flex flex-col gap-2">
+              {pendingReqs.map((r) => (
+                <div key={r.id} className="flex items-center gap-2 flex-wrap" style={{ background: PAL.white, borderRadius: 10, padding: "8px 10px" }}>
+                  <b style={{ fontSize: 14 }}>{r.name}</b>
+                  <span style={{ fontSize: 13, color: PAL.mute }}>
+                    {(r.items || []).map((i) => `${fmtShort(new Date(i.day + "T12:00:00"))} · ${SHIFT_LABEL[i.kind]}`).join(", ")}
+                  </span>
+                  <span className="flex gap-1" style={{ marginLeft: "auto" }}>
+                    <Btn small onClick={() => decideReq(r, true)}>Одобрить</Btn>
+                    <Btn small tone="coral" onClick={() => decideReq(r, false)}>Отклонить</Btn>
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 14, background: PAL.paper, border: `1px solid ${PAL.line}` }}>
+          <DayTotals rec={totalOf(today)} setToast={setToast} onSave={(rec) => setTotals(today, rec)} />
+        </div>
+
         <div className="flex gap-2 flex-wrap" style={{ marginTop: 12 }}>
-          <Pill color={PAL.mint}>сегодня: {fmtMoney(((daily || {})[dkey(today, "day")]?.cash || 0) + ((daily || {})[dkey(today, "night")]?.cash || 0))}</Pill>
-          <Pill color={PAL.sky}>кальянов: {((daily || {})[dkey(today, "day")]?.hookahs || 0) + ((daily || {})[dkey(today, "night")]?.hookahs || 0)}</Pill>
           <Pill color={PAL.lilac}>{MONTHS_RU[month]}: {fmtMoney(monthTot.cash)} · {monthTot.hk} шт</Pill>
+          <Pill color={PAL.sky}>смен с кассой: {byDay.filter((r) => r.filled && inMonth(r.day)).length}</Pill>
         </div>
       </Card>
 
@@ -468,11 +520,11 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
                   <div style={{ fontSize: 12, color: PAL.mute }}>{kind === "day" ? "11:00–23:00" : "16:00–02:00, пт/сб до 04:00"}</div>
                 </div>
                 {days.map((d) => {
-                  const key = dkey(iso(d), kind); const e = empById[shifts[key]]; const rec = (daily || {})[key];
+                  const key = dkey(iso(d), kind); const e = empById[shifts[key]]; const dayRec = totalOf(iso(d));
                   return (
                     <div key={key} style={{ borderRadius: 12, padding: 6, background: e ? (e.color || PAL.mint) + "22" : PAL.paper, border: `1.5px ${e ? "solid " + (e.color || PAL.mint) : "dashed " + PAL.line}`, minHeight: 58, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
                       {e && <div style={{ fontWeight: 800, fontSize: 14, textAlign: "center" }}>{e.name}</div>}
-                      {rec?.cash ? <div style={{ fontSize: 11, textAlign: "center", color: PAL.mintDeep, fontWeight: 700 }}>{fmtMoney(rec.cash)} · {rec.hookahs} шт</div> : null}
+                      {kind === "day" && dayRec ? <div style={{ fontSize: 11, textAlign: "center", color: PAL.mintDeep, fontWeight: 700 }}>{fmtMoney(dayRec.cash)} · {dayRec.hookahs} шт</div> : null}
                       <select value={shifts[key] || ""} onChange={(ev) => setCell(iso(d), kind, ev.target.value)}
                         style={{ ...STY.input, padding: "4px 6px", fontSize: 12, background: PAL.cellBg, border: "none", textAlign: "center", color: e ? PAL.mute : PAL.ink }}>
                         <option value="">{e ? "заменить…" : "назначить…"}</option>
@@ -496,30 +548,46 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={STY.tip} formatter={(v) => fmtMoney(v)} />
-              <Bar dataKey="1-я смена" stackId="a" fill={PAL.sun} isAnimationActive={false} />
-              <Bar dataKey="2-я смена" stackId="a" fill={PAL.ink} radius={[6, 6, 0, 0]} isAnimationActive={false} />
+              <Bar dataKey="касса" fill={PAL.mint} radius={[6, 6, 0, 0]} isAnimationActive={false} />
             </BarChart>
           </ResponsiveContainer>
         )}
-        <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto", marginTop: 8 }}>
+        <div style={{ overflowX: "auto", maxHeight: 460, overflowY: "auto", marginTop: 8 }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
             <thead><tr>
               <th style={th}>День</th><th style={th}>Смена</th>
               <th style={{ ...th, textAlign: "right" }}>Касса</th>
               <th style={{ ...th, textAlign: "right" }}>Кальянов</th>
               <th style={{ ...th, textAlign: "right" }}>Бонусный пул</th>
+              <th style={th} />
             </tr></thead>
             <tbody>
-              {byDay.length === 0 && <tr><td style={{ ...td, color: PAL.mute }} colSpan={5}>Пока нет данных — заполни кассу за сегодня.</td></tr>}
+              {byDay.length === 0 && <tr><td style={{ ...td, color: PAL.mute }} colSpan={6}>Пока нет данных — назначь смены и заполни кассу.</td></tr>}
               {byDay.map((r) => {
                 const d = new Date(r.day + "T12:00:00");
+                const editing = editDay === r.day;
                 return (
-                  <tr key={r.day} style={{ background: r.day === today ? PAL.mintPale : "transparent" }}>
+                  <tr key={r.day} style={{ background: r.day === today ? PAL.mintPale : (r.filled ? "transparent" : PAL.lowBg) }}>
                     <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap" }}>{DAYS_RU[(d.getDay() + 6) % 7]}, {fmtShort(d)}</td>
-                    <td style={td}>{r.names.join(" и ") || "—"}</td>
-                    <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(r.cash)}</td>
-                    <td style={{ ...num, fontWeight: 700 }}>{r.hookahs}</td>
-                    <td style={{ ...num, color: PAL.lilac, fontWeight: 700 }}>{fmtMoney(r.pool)}</td>
+                    <td style={td}>{r.emps.map((e) => e.name).join(" и ") || <span style={{ color: PAL.mute }}>никого</span>}</td>
+                    {editing ? (
+                      <td style={td} colSpan={4}>
+                        <DayTotals compact rec={r.filled ? { cash: r.cash, hookahs: r.hookahs } : null} setToast={setToast}
+                          onSave={(rec) => { setTotals(r.day, rec); setEditDay(null); }} />
+                      </td>
+                    ) : r.filled ? (
+                      <>
+                        <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(r.cash)}</td>
+                        <td style={{ ...num, fontWeight: 700 }}>{r.hookahs}</td>
+                        <td style={{ ...num, color: PAL.lilac, fontWeight: 700 }}>{fmtMoney(r.pool)}</td>
+                        <td style={{ ...td, textAlign: "right" }}><Btn small tone="ghost" onClick={() => setEditDay(r.day)}>Изменить</Btn></td>
+                      </>
+                    ) : (
+                      <>
+                        <td style={{ ...td, color: PAL.coral, fontWeight: 700 }} colSpan={3}>Касса не заполнена — необходимо заполнить</td>
+                        <td style={{ ...td, textAlign: "right" }}><Btn small onClick={() => setEditDay(r.day)}>Заполнить</Btn></td>
+                      </>
+                    )}
                   </tr>
                 );
               })}
