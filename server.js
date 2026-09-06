@@ -22,6 +22,8 @@ const DEFAULT_STATE = () => ({
   shift: null,
   closedShifts: [],
   ledger: [],
+  daily: {},
+  inventories: [],
   people: {},    // telegramId → { role: "admin" | "staff", empId, name }
   invites: {},   // код → empId
   requests: [],  // заявки сотрудников на смены
@@ -224,14 +226,130 @@ app.use(express.static(path.join(__dirname, "public")));
 app.get("*", (_, res) => res.sendFile(path.join(__dirname, "public", "index.html")));
 
 // ───────────────────────── Telegram-бот ─────────────────────────
-const pending = new Map(); // chatId → { total, items, docTotal }
+const BOWLS = [
+  ["classic", "Классика", 22],
+  ["pro1", "Хука Про 1", 11],
+  ["pro2", "Хука Про 2", 22],
+  ["fruit", "Фрукты", 30],
+];
+const BOWL_G = Object.fromEntries(BOWLS.map(([k, , g]) => [k, g]));
+const BOWL_NAME = Object.fromEntries(BOWLS.map(([k, n]) => [k, n]));
+const INV_KIND = { mid: "Промежуточная", main: "Основная" };
+const INV_PERIOD = 30; // дней между инвентаризациями
+const DEVIATION = 800; // допустимое отклонение, г
+const KIND_LABEL = { day: "1-я", night: "2-я" };
+
+const WD = ["Вс", "Пн", "Вт", "Ср", "Чт", "Пт", "Сб"];
+const dayAt = (n) => { const d = new Date(); d.setHours(12, 0, 0, 0); d.setDate(d.getDate() + n); return d; };
+const isoAt = (n) => iso(dayAt(n));
+const dt = (day) => new Date(day + "T12:00:00");
+const ruDay = (day) => { const d = dt(day); return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")} ${WD[d.getDay()]}`; };
+const ruShort = (day) => { const d = dt(day); return `${String(d.getDate()).padStart(2, "0")}.${String(d.getMonth() + 1).padStart(2, "0")}`; };
+const daysBetween = (a, b) => Math.round((dt(b) - dt(a)) / 864e5);
+
+// касса за день: новый ключ «|all», старые «|day»/«|night» суммируем
+const dayTotals = (s, day) => {
+  const all = s.daily?.[`${day}|all`];
+  if (all) return { cash: Number(all.cash) || 0, hookahs: Number(all.hookahs) || 0 };
+  const a = s.daily?.[`${day}|day`], b = s.daily?.[`${day}|night`];
+  if (!a && !b) return null;
+  return { cash: (Number(a?.cash) || 0) + (Number(b?.cash) || 0), hookahs: (Number(a?.hookahs) || 0) + (Number(b?.hookahs) || 0) };
+};
+const setDayTotals = (s, day, rec) => {
+  s.daily = s.daily || {};
+  delete s.daily[`${day}|day`]; delete s.daily[`${day}|night`];
+  s.daily[`${day}|all`] = { cash: Math.round(rec.cash) || 0, hookahs: Math.round(rec.hookahs) || 0 };
+};
+const clearDayTotals = (s, day) => {
+  s.daily = s.daily || {};
+  delete s.daily[`${day}|all`]; delete s.daily[`${day}|day`]; delete s.daily[`${day}|night`];
+};
+const empName = (s, id) => s.employees.find((e) => e.id === id)?.name || null;
+const shiftLine = (s, day) =>
+  `1-я: ${empName(s, s.roster[`${day}|day`]) || "—"} · 2-я: ${empName(s, s.roster[`${day}|night`]) || "—"}`;
+
+const pushLedger = (s, e) => {
+  s.ledger.push({ id: "l" + Date.now() + Math.random().toString(16).slice(2, 5), date: iso(Date.now()), ts: Date.now(), ...e });
+};
+const lastOf = (s, type, field = "date") => {
+  const rows = s.ledger.filter((l) => l.type === type && l[field]);
+  if (!rows.length) return null;
+  return rows.reduce((m, l) => (l[field] > m ? l[field] : m), rows[0][field]);
+};
+const lastSalePeriod = (s) => {
+  const rows = s.ledger.filter((l) => l.type === "sale" && l.pTo);
+  if (!rows.length) return null;
+  const to = rows.reduce((m, l) => (l.pTo > m ? l.pTo : m), rows[0].pTo);
+  const from = rows.filter((l) => l.pTo === to).reduce((m, l) => (l.pFrom < m ? l.pFrom : m), to);
+  return { from, to };
+};
+const nextPeriod = (s) => {
+  const last = lastSalePeriod(s);
+  const today = iso(Date.now());
+  if (!last) return { from: today, to: today };
+  const from = iso(dt(last.to).getTime() + 864e5);
+  return { from, to: from > today ? from : today };
+};
+const periodNote = (p) => (p.from === p.to ? ruShort(p.from) : `${ruShort(p.from)} — ${ruShort(p.to)}`);
+const lastInv = (s) => (s.inventories?.length ? s.inventories[s.inventories.length - 1] : null);
+
+// ───────── понимание свободного текста ─────────
+const NLU_PROMPT = (s) => `Ты разбираешь сообщения управляющего кальянной, написанные обычными словами, и превращаешь их в команду.
+
+Сегодня: ${iso(Date.now())} (${WD[new Date().getDay()]}).
+Сотрудники: ${s.employees.map((e) => e.name).join(", ") || "нет"}.
+Виды кальянов: classic — Классика (22 г), pro1 — Хука Про 1 (11 г), pro2 — Хука Про 2 (22 г), fruit — Фрукты (30 г).
+
+Верни СТРОГО JSON без markdown, одно из:
+{"action":"roster","items":[{"day":"YYYY-MM-DD","kind":"day|night","name":"Имя"}]}  — кто в какую смену работает (1-я/первая/утро = day, 2-я/вторая/вечер/ночь = night)
+{"action":"cash","day":"YYYY-MM-DD","cash":45000,"hookahs":18}  — касса за день; неизвестное поле = null
+{"action":"cash_show","day":"YYYY-MM-DD"}  — показать кассу за день
+{"action":"supply","grams":null}  — пришла поставка табака; grams только если названо число граммов
+{"action":"sale","items":[{"kind":"classic","qty":12}],"from":"YYYY-MM-DD","to":"YYYY-MM-DD"}  — продажи кальянов
+{"action":"writeoff","items":[{"kind":"classic","qty":2}],"reason":"перезабивка"}  — списание
+{"action":"adjust","grams":-500,"note":"комментарий"}  — ручная правка остатка
+{"action":"inventory","kind":"mid|main","actual":7450}  — инвентаризация; actual = null, если число не названо
+{"action":"stock"}  — сколько табака на складе
+{"action":"week","offset":0}  — график смен (offset 1 — следующая неделя)
+{"action":"unknown","hint":"чего не хватает"}  — если непонятно
+
+Даты считай от сегодня: «завтра», «в пятницу», «8.09». Имена бери как написаны.`;
+
+async function askClaude(state, text) {
+  if (!ANTHROPIC_API_KEY) return { action: "unknown", hint: "нет ключа ANTHROPIC_API_KEY" };
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-6", max_tokens: 700,
+      system: NLU_PROMPT(state),
+      messages: [{ role: "user", content: text }],
+    }),
+  });
+  const j = await res.json();
+  if (j.error) throw new Error(j.error.message || "ошибка API");
+  const out = (j.content || []).filter((c) => c.type === "text").map((c) => c.text).join("").replace(/```json|```/g, "").trim();
+  return JSON.parse(out.slice(out.indexOf("{"), out.lastIndexOf("}") + 1));
+}
+
+const pending = new Map(); // chatId → распознанная накладная
 
 if (BOT_TOKEN) {
   const bot = new Bot(BOT_TOKEN);
   const adminIds = String(ADMIN_ID || "").split(",").map((x) => x.trim()).filter(Boolean);
-  // /id работает всегда — им узнают свой Telegram id, чтобы вписать в ADMIN_ID
+  const sess = new Map(); // chatId → шаг диалога
+  const getS = (ctx) => sess.get(ctx.chat.id) || null;
+  const setS = (ctx, v) => sess.set(ctx.chat.id, v);
+  const clrS = (ctx) => sess.delete(ctx.chat.id);
+
+  const menu = new Keyboard()
+    .text("💰 Касса").text("🗓 График").row()
+    .text("👥 Смены").text("📦 Склад").row()
+    .text("📄 Поставка из файла").text("👤 Сотрудники").resized();
+  const staffMenu = new Keyboard().text("🗓 Мои смены").text("✍️ Заявка на смену").resized();
+
+  // /id работает всегда — им узнают свой Telegram id
   bot.command("id", (ctx) => ctx.reply(`Твой Telegram id: ${ctx.from?.id}\nВпиши его в переменную ADMIN_ID на Render.`));
-  // приглашение сотрудника: /join КОД
   bot.command("join", async (ctx) => {
     const code = (ctx.match || "").trim().toUpperCase();
     if (!code) return ctx.reply("Формат: /join КОД (код даёт управляющий).");
@@ -248,7 +366,7 @@ if (BOT_TOKEN) {
     ctx.reply(`Привет, ${emp?.name}! Теперь можно смотреть свои смены и отправлять заявки.`, { reply_markup: staffMenu });
   });
 
-  // роли: админ из ADMIN_ID или из базы, сотрудник — из базы
+  // роли
   bot.use(async (ctx, next) => {
     const id = String(ctx.from?.id || "");
     const st = await loadState();
@@ -276,8 +394,8 @@ if (BOT_TOKEN) {
         .map(([k]) => k.split("|")).filter(([d]) => d >= iso(Date.now())).sort();
       const pend = ctx.state.st.requests.filter((r) => r.empId === p.empId && r.status === "new");
       return ctx.reply(mine.length || pend.length
-        ? "🗓 Твои смены:\n" + (mine.map(([d, k]) => `${d.slice(8)}.${d.slice(5, 7)} · ${KIND_LABEL[k]}`).join("\n") || "—")
-          + (pend.length ? "\n\nНа подтверждении:\n" + pend.flatMap((r) => r.items.map((i) => `${i.day.slice(8)}.${i.day.slice(5, 7)} · ${KIND_LABEL[i.kind]}`)).join("\n") : "")
+        ? "🗓 Твои смены:\n" + (mine.map(([d, k]) => `${ruDay(d)} · ${KIND_LABEL[k]}`).join("\n") || "—")
+          + (pend.length ? "\n\nНа подтверждении:\n" + pend.flatMap((r) => r.items.map((i) => `${ruDay(i.day)} · ${KIND_LABEL[i.kind]}`)).join("\n") : "")
         : "Смен пока нет. Напиши, например, «завтра 1».");
     }
     if (text === "✍️ Заявка на смену") return ctx.reply("Напиши, когда готов работать: «завтра 1», «пт 2, сб 1».");
@@ -286,7 +404,7 @@ if (BOT_TOKEN) {
     if (!items.length) return ctx.reply("Не понял. Напиши, например: «завтра 1» или «пт 2, сб 1».");
     const req = { id: uid(), empId: p.empId, name: myName, items, ts: Date.now(), status: "new" };
     await mutate((s) => { s.requests.push(req); });
-    const list = items.map((i) => `${i.day.slice(8)}.${i.day.slice(5, 7)} · ${KIND_LABEL[i.kind]}`).join("\n");
+    const list = items.map((i) => `${ruDay(i.day)} · ${KIND_LABEL[i.kind]}`).join("\n");
     const admins = new Set(adminIds.concat(Object.entries(ctx.state.st.people).filter(([, x]) => x.role === "admin").map(([id]) => id)));
     for (const aid of admins) {
       ctx.api.sendMessage(aid, `✍️ Заявка от ${myName}:\n${list}`, {
@@ -296,151 +414,303 @@ if (BOT_TOKEN) {
     return ctx.reply("Отправил управляющему:\n" + list);
   });
 
-  const KIND_LABEL = { day: "1-я", night: "2-я" };
-  const staffMenu = new Keyboard().text("🗓 Мои смены").text("✍️ Заявка на смену").resized();
-  const menu = new Keyboard()
-    .text("📦 Остаток").text("📊 Сегодня").row()
-    .text("▶️ Открыть смену").text("⏹ Закрыть смену").row()
-    .text("🎯 Продажа").text("➕ Поставка").text("➖ Списание").row()
-    .text("🗓 График").text("👥 Сотрудники").resized();
+  bot.command("start", (ctx) => { clrS(ctx); ctx.reply(
+    "Привет! Я админ кальянной.\n\n" +
+    "Кнопки внизу — касса, график, смены, склад.\n" +
+    "Можно просто писать словами:\n" +
+    "• «завтра Вова 2, Денис 1»\n" +
+    "• «касса за сегодня 52000, 21 кальян»\n" +
+    "• «пришла поставка табака»\n" +
+    "• «продали 14 классики и 3 фрукта»\n" +
+    "• «сколько табака на складе»", { reply_markup: menu }); });
 
+  // ═════════ КАССА ═════════
+  const cashText = (s, day) => {
+    const t = dayTotals(s, day);
+    const head = `💰 Касса за ${ruDay(day)}\n${shiftLine(s, day)}\n\n`;
+    return t
+      ? head + `Касса: ${fmt(t.cash)} ₽\nКальянов: ${t.hookahs}`
+      : head + "Не заполнена.";
+  };
+  const cashKb = (s, day) => {
+    const t = dayTotals(s, day);
+    const kb = new InlineKeyboard();
+    if (t) kb.text("✏️ Изменить", `c:set:${day}`).text("🗑 Удалить", `c:del:${day}`).row();
+    else kb.text("✍️ Ввести кассу", `c:set:${day}`).row();
+    return kb.text("← Другой день", "c:pick:0");
+  };
+  const dayListKb = (prefix, page = 0, back = null) => {
+    const kb = new InlineKeyboard();
+    for (let i = 0; i < 14; i++) {
+      const d = isoAt(-(page * 14 + i));
+      kb.text(page === 0 && i === 0 ? `Сегодня · ${ruShort(d)}` : ruDay(d), `${prefix}${d}`);
+      if (i % 2 === 1) kb.row();
+    }
+    kb.row();
+    if (page > 0) kb.text("← Ближе", `c:pick:${page - 1}`);
+    kb.text("Раньше →", `c:pick:${page + 1}`);
+    if (back) kb.row().text("← Назад", back);
+    return kb;
+  };
+
+  bot.hears("💰 Касса", async (ctx) => {
+    clrS(ctx);
+    const s = await loadState();
+    const today = iso(Date.now());
+    ctx.reply(cashText(s, today), {
+      reply_markup: new InlineKeyboard()
+        .text(dayTotals(s, today) ? "✏️ Изменить за сегодня" : "✍️ Ввести за сегодня", `c:set:${today}`).row()
+        .text("📅 Другой день", "c:pick:0"),
+    });
+  });
+  bot.callbackQuery(/^c:pick:(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText("За какой день?", { reply_markup: dayListKb("c:day:", Number(ctx.match[1])) });
+  });
+  bot.callbackQuery(/^c:day:(.+)$/, async (ctx) => {
+    const day = ctx.match[1];
+    const s = await loadState();
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText(cashText(s, day), { reply_markup: cashKb(s, day) });
+  });
+  bot.callbackQuery(/^c:set:(.+)$/, async (ctx) => {
+    const day = ctx.match[1];
+    setS(ctx, { flow: "cash", day });
+    await ctx.answerCallbackQuery();
+    ctx.reply(`Касса за ${ruDay(day)}. Напиши сумму и число кальянов через пробел, например: 52000 21`);
+  });
+  bot.callbackQuery(/^c:del:(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText(`Удалить кассу за ${ruDay(ctx.match[1])}?`, {
+      reply_markup: new InlineKeyboard().text("🗑 Да, удалить", `c:delok:${ctx.match[1]}`).text("Отмена", `c:day:${ctx.match[1]}`),
+    });
+  });
+  bot.callbackQuery(/^c:delok:(.+)$/, async (ctx) => {
+    const day = ctx.match[1];
+    await mutate((s) => clearDayTotals(s, day));
+    await ctx.answerCallbackQuery("Удалено");
+    ctx.editMessageText(`🗑 Касса за ${ruDay(day)} удалена.`);
+  });
+
+  // ═════════ ГРАФИК ═════════
+  const weekText = (s, offset) => {
+    const today = iso(Date.now());
+    const mon = dayAt(-((new Date().getDay() + 6) % 7) + offset * 7);
+    const days = Array.from({ length: 7 }, (_, i) => iso(new Date(mon.getTime() + i * 864e5)));
+    const shown = offset === 0 ? days.filter((d) => d >= today) : days;
+    const head = offset === 0 ? "🗓 Эта неделя — с сегодняшнего дня" : "🗓 Следующая неделя";
+    const rows = shown.map((d) => `${d === today ? "▶️" : "  "} ${ruDay(d)}   ${shiftLine(s, d)}`);
+    const empty = shown.reduce((n, d) => n + (s.roster[`${d}|day`] ? 0 : 1) + (s.roster[`${d}|night`] ? 0 : 1), 0);
+    return `${head}\n\n${rows.join("\n") || "Дней не осталось"}\n\n${empty ? `⚠️ Без сотрудника: ${empty} смен` : "✅ Все смены закрыты"}`;
+  };
+  const weekKb = (offset) => new InlineKeyboard()
+    .text(offset === 0 ? "Следующая неделя →" : "← Эта неделя", `g:${offset === 0 ? 1 : 0}`).row()
+    .text("👥 Изменить смены", "sh:list");
+
+  bot.hears("🗓 График", async (ctx) => { clrS(ctx); ctx.reply(weekText(await loadState(), 0), { reply_markup: weekKb(0) }); });
+  bot.callbackQuery(/^g:(0|1)$/, async (ctx) => {
+    const off = Number(ctx.match[1]);
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText(weekText(await loadState(), off), { reply_markup: weekKb(off) });
+  });
+
+  // ═════════ СМЕНЫ ═════════
+  const shiftDaysKb = () => {
+    const kb = new InlineKeyboard();
+    for (let i = 0; i < 14; i++) {
+      const d = isoAt(i);
+      kb.text(i === 0 ? `Сегодня · ${ruShort(d)}` : i === 1 ? `Завтра · ${ruShort(d)}` : ruDay(d), `sh:d:${d}`);
+      if (i % 2 === 1) kb.row();
+    }
+    return kb;
+  };
+  const dayShiftKb = (day) => new InlineKeyboard()
+    .text("1-я смена", `sh:k:${day}:day`).text("2-я смена", `sh:k:${day}:night`).row()
+    .text("← Другой день", "sh:list");
+  const empKb = (s, day, kind) => {
+    const kb = new InlineKeyboard();
+    s.employees.forEach((e, i) => { kb.text(e.name, `sh:e:${day}:${kind}:${e.id}`); if (i % 2 === 1) kb.row(); });
+    return kb.row().text("✍️ Замена — вписать имя", `sh:new:${day}:${kind}`).row()
+      .text("✖️ Убрать", `sh:e:${day}:${kind}:none`).text("← Назад", `sh:d:${day}`);
+  };
+
+  bot.hears("👥 Смены", async (ctx) => { clrS(ctx); ctx.reply("На какой день ставим смены?", { reply_markup: shiftDaysKb() }); });
+  bot.callbackQuery("sh:list", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText("На какой день ставим смены?", { reply_markup: shiftDaysKb() });
+  });
+  bot.callbackQuery(/^sh:d:(.+)$/, async (ctx) => {
+    const day = ctx.match[1];
+    const s = await loadState();
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText(`${ruDay(day)}\n${shiftLine(s, day)}\n\nКакую смену меняем?`, { reply_markup: dayShiftKb(day) });
+  });
+  bot.callbackQuery(/^sh:k:(.+):(day|night)$/, async (ctx) => {
+    const [, day, kind] = ctx.match;
+    const s = await loadState();
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText(`${ruDay(day)} · ${KIND_LABEL[kind]} смена\nСейчас: ${empName(s, s.roster[`${day}|${kind}`]) || "—"}\n\nКто работает?`, { reply_markup: empKb(s, day, kind) });
+  });
+  bot.callbackQuery(/^sh:e:(.+):(day|night):(.+)$/, async (ctx) => {
+    const [, day, kind, empId] = ctx.match;
+    const s = await mutate((s) => {
+      if (empId === "none") delete s.roster[`${day}|${kind}`];
+      else s.roster[`${day}|${kind}`] = empId;
+    });
+    await ctx.answerCallbackQuery("Записал");
+    ctx.editMessageText(`✅ ${ruDay(day)}\n${shiftLine(s, day)}`, { reply_markup: dayShiftKb(day) });
+  });
+  bot.callbackQuery(/^sh:new:(.+):(day|night)$/, async (ctx) => {
+    const [, day, kind] = ctx.match;
+    setS(ctx, { flow: "empname", day, kind });
+    await ctx.answerCallbackQuery();
+    ctx.reply(`Кто выходит на замену ${ruDay(day)} в ${KIND_LABEL[kind]} смену? Напиши имя.`);
+  });
+
+  // ═════════ СКЛАД ═════════
   const stockText = (s) => {
     const st = stockOf(s);
-    const last = s.ledger.slice(-5).reverse().map((m) => `${m.date.slice(5)} · ${m.grams > 0 ? "+" : ""}${m.grams} г · ${m.note || m.type}`).join("\n");
-    return `📦 На складе: *${fmt(st)} г*\n\nПоследние движения:\n${last || "—"}`;
+    const sup = lastOf(s, "supply");
+    const sale = lastSalePeriod(s);
+    const wo = lastOf(s, "writeoff");
+    const inv = lastInv(s);
+    const invLine = inv
+      ? `Инвентаризация: ${INV_KIND[inv.kind]} ${ruShort(inv.date)}, факт ${fmt(inv.actual)} г · следующая через ${Math.max(0, INV_PERIOD - daysBetween(inv.date, iso(Date.now())))} дн.`
+      : "Инвентаризация: ещё не проводилась";
+    return `📦 На складе: ${fmt(st)} г\n\n` +
+      `Продажи внесены по: ${sale ? periodNote(sale) : "—"}\n` +
+      `Последняя поставка: ${sup ? ruShort(sup) : "—"}\n` +
+      `Последнее списание: ${wo ? ruShort(wo) : "—"}\n` +
+      invLine;
   };
+  const stockKb = new InlineKeyboard()
+    .text("🎯 Продажи кальянов", "w:sale").text("➖ Списание", "w:wo").row()
+    .text("✏️ Ручная корректировка", "w:adj").text("📋 Инвентаризация", "w:inv").row()
+    .text("📄 Поставка из файла", "w:file");
 
-  bot.command("start", (ctx) => ctx.reply("Привет! Я админ кальянной.\n\n• Пришли фото или PDF накладной — посчитаю граммы.\n• График смен пиши текстом, например:\n  «завтра Вова 1, Андрей 2»\n  «пт Вова первая Лена вторая»\n• Кнопки ниже — смены, склад, продажи.", { reply_markup: menu }));
+  bot.hears("📦 Склад", async (ctx) => { clrS(ctx); ctx.reply(stockText(await loadState()), { reply_markup: stockKb }); });
 
-  bot.hears("👥 Сотрудники", async (ctx) => {
-    const s = await loadState();
-    const linked = Object.values(s.people).filter((p) => p.role === "staff");
-    const kb = new InlineKeyboard();
-    s.employees.forEach((e) => {
-      const on = linked.some((p) => p.empId === e.id);
-      kb.text(`${on ? "✅" : "➕"} ${e.name}`, `inv:${e.id}`).row();
-    });
-    ctx.reply(s.employees.length
-      ? "Кому выдать доступ в бот? ✅ — уже подключён.\nНажми на имя, я дам код для сотрудника."
-      : "Штат пуст. Сначала добавь сотрудников — например, напиши «завтра Вова 1».", { reply_markup: kb });
-  });
-  bot.callbackQuery(/^inv:(.+)$/, async (ctx) => {
-    const empId = ctx.match[1];
-    const code = Math.random().toString(36).slice(2, 7).toUpperCase();
-    const s = await mutate((s) => { s.invites[code] = empId; });
-    const emp = s.employees.find((e) => e.id === empId);
+  // ручная корректировка
+  bot.callbackQuery("w:adj", async (ctx) => {
+    setS(ctx, { flow: "adjust" });
     await ctx.answerCallbackQuery();
-    ctx.reply(`Код для ${emp?.name}: \`${code}\`\n\nПусть откроет бота и пришлёт:\n/join ${code}`, { parse_mode: "Markdown" });
+    ctx.reply("Напиши, на сколько поправить остаток:\n500 — добавит, -500 — уберёт.\nМожно с комментарием: «-300 просыпали»");
   });
 
-  // подтверждение заявок
-  bot.callbackQuery(/^req:(ok|no):(.+)$/, async (ctx) => {
-    const [, verdict, id] = ctx.match;
-    let req = null;
-    const s = await mutate((s) => {
-      req = s.requests.find((r) => r.id === id);
-      if (!req || req.status !== "new") return;
-      req.status = verdict === "ok" ? "ok" : "no";
-      if (verdict === "ok") applyRoster(s, req.items);
-    });
-    await ctx.answerCallbackQuery();
-    if (!req) return ctx.editMessageText("Заявка уже обработана.");
-    const list = req.items.map((i) => `${i.day.slice(8)}.${i.day.slice(5, 7)} · ${KIND_LABEL[i.kind]}`).join(", ");
-    await ctx.editMessageText(`${verdict === "ok" ? "✅ Подтверждено" : "✖️ Отклонено"} · ${req.name}: ${list}`);
-    const tg = Object.entries(s.people).find(([, p]) => p.empId === req.empId);
-    if (tg) ctx.api.sendMessage(tg[0], verdict === "ok" ? `✅ Смены подтверждены: ${list}` : `✖️ Заявку отклонили: ${list}`).catch(() => {});
-  });
-
-  bot.hears("🗓 График", (ctx) => { pending.set(ctx.chat.id, { ask: "roster" }); ctx.reply("Пиши смены текстом. Примеры:\n«Вова 1 Андрей 2» — на сегодня\n«завтра Вова 1, Лена 2»\n«пт Вова первая; сб Андрей вторая»\nМожно несколько строк сразу."); });
-  bot.hears("📦 Остаток", async (ctx) => ctx.reply(stockText(await loadState()), { parse_mode: "Markdown" }));
-  bot.hears("📊 Сегодня", async (ctx) => {
-    const s = await loadState(); const t = todaySummary(s);
-    const cur = s.shift ? `Открыта ${SHIFT_RU[s.shift.kind]} с ${new Date(s.shift.openedAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}, кальянов: ${s.shift.sales.length}, касса ${fmt(cashOf(s.shift))} ₽` : "Смена не открыта";
-    ctx.reply(`📊 Сегодня\nКальянов: ${t.qty}\nТабака ушло: ${fmt(t.grams)} г\nКасса: ${fmt(t.cash)} ₽\n\n${cur}`);
-  });
-
-  bot.hears("▶️ Открыть смену", async (ctx) => {
+  // продажи и списания — по видам подряд
+  const startQty = async (ctx, mode) => {
     const s = await loadState();
-    if (s.shift) return ctx.reply(`Уже открыта ${SHIFT_RU[s.shift.kind]}. Сначала закрой её.`);
-    const kb = new InlineKeyboard().text("1-я (11:00–23:00)", "open:day").text("2-я (16:00–02:00)", "open:night");
-    ctx.reply("Какую смену открыть?", { reply_markup: kb });
-  });
-  bot.callbackQuery(/^open:(day|night)$/, async (ctx) => {
-    const kind = ctx.match[1];
-    const ok = await mutate((s) => openShift(s, kind));
-    await ctx.answerCallbackQuery();
-    ctx.editMessageText(ok === false ? "Смена уже открыта." : `▶️ ${SHIFT_RU[kind]} открыта.`);
-  });
-  bot.hears("⏹ Закрыть смену", async (ctx) => {
-    const s = await loadState();
-    if (!s.shift) return ctx.reply("Открытой смены нет.");
-    const kb = new InlineKeyboard().text(`Закрыть — касса ${fmt(cashOf(s.shift))} ₽`, "close").text("Отмена", "cancel");
-    ctx.reply(`Закрыть ${SHIFT_RU[s.shift.kind]}? Кальянов: ${s.shift.sales.length}`, { reply_markup: kb });
-  });
-  bot.callbackQuery("close", async (ctx) => {
-    const done = await mutate((s) => closeShift(s));
-    await ctx.answerCallbackQuery();
-    ctx.editMessageText(done && done.sales ? `⏹ ${SHIFT_RU[done.kind]} закрыта. Кальянов: ${done.sales.length}, касса ${fmt(cashOf(done))} ₽` : "Открытой смены нет.");
-  });
-
-  bot.hears("🎯 Продажа", async (ctx) => {
-    const s = await loadState();
-    if (!s.shift) return ctx.reply("Сначала открой смену.");
-    const kb = new InlineKeyboard();
-    for (const k of ["regular", "premium", "electro"]) kb.text(`${KIND_RU[k]} ${fmt(s.prices[k])}`, `sale:${k}:0`);
-    kb.row();
-    for (const d of [10, 15, 20, 30]) kb.text(`Обычный −${d}%`, `sale:regular:${d}`);
-    ctx.reply("Что продали?", { reply_markup: kb });
-  });
-  bot.callbackQuery(/^sale:(regular|premium|electro):(\d+)$/, async (ctx) => {
-    const [, kind, disc] = ctx.match;
-    const rec = await mutate((s) => sale(s, kind, Number(disc)));
-    await ctx.answerCallbackQuery(rec ? "Записано" : "Смена не открыта");
-    if (rec) {
-      const s = await loadState();
-      ctx.reply(`✅ ${KIND_RU[kind]}${disc > 0 ? ` −${disc}%` : ""} · ${fmt(rec.price)} ₽. Касса смены ${fmt(cashOf(s.shift))} ₽, склад ${fmt(stockOf(s))} г`);
+    const p = nextPeriod(s);
+    setS(ctx, { flow: "qty", mode, i: 0, q: {}, from: p.from, to: p.to });
+    const last = lastSalePeriod(s);
+    await ctx.reply(
+      (mode === "sale" ? "🎯 Продажи кальянов" : "➖ Списание") + "\n" +
+      (last ? `Последние продажи внесены по ${periodNote(last)}.\n` : "") +
+      `Период: ${periodNote(p)}`,
+      { reply_markup: new InlineKeyboard().text("✅ Этот период", "q:go").text("✍️ Другой период", "q:period") });
+  };
+  const askQty = async (ctx) => {
+    const st = getS(ctx);
+    const [k, name, g] = BOWLS[st.i];
+    await ctx.reply(`${name} · ${g} г — сколько штук?\nНапиши число (0 — если не было).`);
+  };
+  const qtySummary = (st) => {
+    const rows = BOWLS.filter(([k]) => st.q[k] > 0).map(([k, name, g]) => `• ${name}: ${st.q[k]} шт · ${st.q[k] * g} г`);
+    const grams = BOWLS.reduce((a, [k, , g]) => a + (st.q[k] || 0) * g, 0);
+    return { rows, grams };
+  };
+  const finishQty = async (ctx) => {
+    const st = getS(ctx);
+    const { rows, grams } = qtySummary(st);
+    if (!grams) { clrS(ctx); return ctx.reply("Пусто — ничего не записал."); }
+    if (st.mode === "wo" && !st.reason) {
+      setS(ctx, { ...st, step: "reason" });
+      return ctx.reply("Причина списания?", {
+        reply_markup: new InlineKeyboard().text("Перезабивка", "q:r:перезабивка").text("Брак", "q:r:брак").row().text("✍️ Своя причина", "q:r:own"),
+      });
     }
-  });
-
-  bot.hears("➕ Поставка", (ctx) => { pending.set(ctx.chat.id, { ask: "supply" }); ctx.reply("Сколько граммов пришло? Напиши число (или пришли фото/PDF накладной)."); });
-  bot.hears("➖ Списание", (ctx) => { pending.set(ctx.chat.id, { ask: "writeoff" }); ctx.reply("Сколько граммов списать? Напиши число, можно с причиной: `60 перезабивка`", { parse_mode: "Markdown" }); });
-
-  // число в ответ на «Поставка» / «Списание»
-  const replyRoster = async (ctx, text) => {
-    const cur = await loadState();
-    const items = parseRoster(text, cur.employees);
-    if (!items.length) return false;
-    const s = await mutate((s) => { applyRoster(s, items); });
-    const done = items.map((it) => {
-      const emp = s.employees.find((e) => s.roster[`${it.day}|${it.kind}`] === e.id);
-      return `${it.day.slice(8)}.${it.day.slice(5, 7)} · ${KIND_LABEL[it.kind]} — ${emp ? emp.name : it.name}`;
-    });
-    await ctx.reply("🗓 Записал:\n" + done.join("\n"));
-    return true;
+    const s = await loadState();
+    await ctx.reply(
+      `${st.mode === "sale" ? "🎯 Продажи" : "➖ Списание"} за ${periodNote(st)}\n\n${rows.join("\n")}\n\nИтого −${fmt(grams)} г\n` +
+      `Остаток станет ${fmt(stockOf(s) - grams)} г` + (st.reason ? `\nПричина: ${st.reason}` : ""),
+      { reply_markup: new InlineKeyboard().text("✅ Записать", "q:save").text("✖️ Отмена", "q:cancel") });
   };
-
-  bot.on("message:text", async (ctx, next) => {
-    const p = pending.get(ctx.chat.id);
-    if (p?.ask === "roster") { pending.delete(ctx.chat.id); if (await replyRoster(ctx, ctx.message.text)) return; return ctx.reply("Не разобрал. Формат: «Вова 1 Андрей 2»"); }
-    if (!p?.ask) {
-      // текст вида «вова 1 андрей 2» — ставим смены и без нажатия кнопки
-      if (/\d|перв|втор|ноч|день/i.test(ctx.message.text) && /[а-яё]{3,}/i.test(ctx.message.text) && !/^\s*\d+\s*$/.test(ctx.message.text)) {
-        if (await replyRoster(ctx, ctx.message.text)) return;
+  bot.callbackQuery("w:sale", async (ctx) => { await ctx.answerCallbackQuery(); startQty(ctx, "sale"); });
+  bot.callbackQuery("w:wo", async (ctx) => { await ctx.answerCallbackQuery(); startQty(ctx, "wo"); });
+  bot.callbackQuery("q:go", async (ctx) => { await ctx.answerCallbackQuery(); askQty(ctx); });
+  bot.callbackQuery("q:period", async (ctx) => {
+    setS(ctx, { ...getS(ctx), step: "period" });
+    await ctx.answerCallbackQuery();
+    ctx.reply("Напиши период: «5.09» или «1.09 - 5.09»");
+  });
+  bot.callbackQuery(/^q:r:(.+)$/, async (ctx) => {
+    const r = ctx.match[1];
+    await ctx.answerCallbackQuery();
+    if (r === "own") { setS(ctx, { ...getS(ctx), step: "reasonOwn" }); return ctx.reply("Напиши причину."); }
+    setS(ctx, { ...getS(ctx), reason: r, step: null });
+    finishQty(ctx);
+  });
+  bot.callbackQuery("q:cancel", async (ctx) => { clrS(ctx); await ctx.answerCallbackQuery(); ctx.editMessageText("Отменено."); });
+  bot.callbackQuery("q:save", async (ctx) => {
+    const st = getS(ctx);
+    await ctx.answerCallbackQuery();
+    if (!st?.q) return ctx.editMessageText("Данные устарели, начни заново.");
+    const s = await mutate((s) => {
+      for (const [k, name, g] of BOWLS) {
+        const qty = st.q[k] || 0;
+        if (!qty) continue;
+        if (st.mode === "sale") pushLedger(s, { type: "sale", kind: k, qty, grams: -qty * g, date: st.to, pFrom: st.from, pTo: st.to, note: `${name} · ${periodNote(st)}` });
+        else pushLedger(s, { type: "writeoff", kind: k, qty, grams: -qty * g, date: st.to, note: `${name} · ${st.reason || "списание"} · ${periodNote(st)}` });
       }
-      return next();
-    }
-    const m = ctx.message.text.match(/^\s*(\d+)\s*(.*)$/);
-    if (!m) return ctx.reply("Нужно число граммов, например 1500.");
-    const grams = Number(m[1]); const note = m[2].trim();
-    pending.delete(ctx.chat.id);
-    const s = await mutate((s) => {
-      if (p.ask === "supply") addMove(s, { type: "supply", grams, note: note || "поставка (бот)" });
-      else addMove(s, { type: "writeoff", grams: -grams, note: note || "списание (бот)" });
     });
-    ctx.reply(`${p.ask === "supply" ? "➕" : "➖"} ${grams} г. На складе ${fmt(stockOf(s))} г`);
+    clrS(ctx);
+    ctx.editMessageText(`✅ Записал. На складе ${fmt(stockOf(s))} г`);
   });
 
-  // файл → распознать → предложить действие
+  // инвентаризация
+  bot.callbackQuery("w:inv", async (ctx) => {
+    const s = await loadState();
+    const inv = lastInv(s);
+    await ctx.answerCallbackQuery();
+    const info = inv
+      ? `Последняя: ${INV_KIND[inv.kind]}, ${ruDay(inv.date)} — факт ${fmt(inv.actual)} г (расхождение ${inv.diff > 0 ? "+" : ""}${fmt(inv.diff)} г).\nПрошло ${daysBetween(inv.date, iso(Date.now()))} дн. из ${INV_PERIOD}.`
+      : "Инвентаризацию ещё не проводили.";
+    ctx.reply(`📋 Инвентаризация\n\n${info}\nРасчётный остаток сейчас: ${fmt(stockOf(s))} г\n\nКакую проводим?`, {
+      reply_markup: new InlineKeyboard().text("Промежуточная", "w:invk:mid").text("Основная", "w:invk:main"),
+    });
+  });
+  bot.callbackQuery(/^w:invk:(mid|main)$/, async (ctx) => {
+    setS(ctx, { flow: "inv", kind: ctx.match[1] });
+    await ctx.answerCallbackQuery();
+    ctx.reply(`${INV_KIND[ctx.match[1]]} инвентаризация. Сколько граммов насчитали по факту? Напиши число.`);
+  });
+  const invConfirm = async (ctx, kind, actual) => {
+    const s = await loadState();
+    const calc = stockOf(s), diff = Math.round(actual - calc);
+    setS(ctx, { flow: "inv", kind, actual, calc, diff, step: "confirm" });
+    await ctx.reply(
+      `📋 ${INV_KIND[kind]}\nРасчёт: ${fmt(calc)} г\nФакт: ${fmt(actual)} г\nРасхождение: ${diff > 0 ? "+" : ""}${fmt(diff)} г\n\n` +
+      (Math.abs(diff) > DEVIATION ? "⚠️ Отклонение больше нормы — стоит пересчитать." : "✅ Отклонение в пределах нормы."),
+      { reply_markup: new InlineKeyboard().text("✅ Сохранить", "inv:save").text("✖️ Отмена", "q:cancel") });
+  };
+  bot.callbackQuery("inv:save", async (ctx) => {
+    const st = getS(ctx);
+    await ctx.answerCallbackQuery();
+    if (!st?.actual && st?.actual !== 0) return ctx.editMessageText("Данные устарели, начни заново.");
+    const s = await mutate((s) => {
+      s.inventories = s.inventories || [];
+      s.inventories.push({ id: "i" + Date.now(), date: iso(Date.now()), kind: st.kind, actual: st.actual, calc: st.calc, diff: st.diff });
+      if (st.diff) pushLedger(s, { type: "inventory", grams: st.diff, note: `${INV_KIND[st.kind].toLowerCase()} инвентаризация (расчёт ${st.calc} г)` });
+    });
+    clrS(ctx);
+    ctx.editMessageText(`✅ Инвентаризация сохранена. Остаток на складе: ${fmt(stockOf(s))} г`);
+  });
+
+  // ═════════ ПОСТАВКА ИЗ ФАЙЛА ═════════
+  const askFile = (ctx) => { setS(ctx, { flow: "supply" }); return ctx.reply("Пришли фото или PDF накладной — посчитаю граммы.\nИли напиши число граммов, если считать не надо."); };
+  bot.hears("📄 Поставка из файла", (ctx) => askFile(ctx));
+  bot.callbackQuery("w:file", async (ctx) => { await ctx.answerCallbackQuery(); askFile(ctx); });
+
   const handleFile = async (ctx, fileId, mediaType) => {
     const wait = await ctx.reply("Читаю накладную… это может занять до минуты");
     const typing = setInterval(() => ctx.replyWithChatAction("typing").catch(() => {}), 4000);
@@ -449,17 +719,20 @@ if (BOT_TOKEN) {
       const buf = Buffer.from(await (await fetch(`https://api.telegram.org/file/bot${BOT_TOKEN}/${f.file_path}`)).arrayBuffer());
       const r = await recognize({ base64: buf.toString("base64"), mediaType });
       pending.set(ctx.chat.id, r);
+      clrS(ctx);
       const lines = r.items.map((it) => `• ${it.name}${it.assumed ? " *" : ""} — ${it.grams} г${it.calc ? ` (${it.calc})` : ""}`).join("\n");
       const warn = r.docTotal !== null && r.docTotal !== r.total ? `\n\n⚠️ В документе напечатано ${fmt(r.docTotal)} г, по строкам ${fmt(r.total)} г — проверь.` : "";
       const s = await loadState();
       const kb = new InlineKeyboard()
-        .text(`➕ Поставка +${fmt(r.total)} г`, "file:add").row()
-        .text(`📋 Инвентаризация → ${fmt(r.total)} г (сейчас ${fmt(stockOf(s))})`, "file:replace").row();
+        .text(`✅ Верно · поставка +${fmt(r.total)} г`, "file:add").row()
+        .text(`📋 Это инвентаризация → ${fmt(r.total)} г`, "file:replace").row();
       if (r.docTotal !== null && r.docTotal !== r.total) kb.text(`Взять итог документа ${fmt(r.docTotal)} г`, "file:doc").row();
-      kb.text("Отмена", "cancel");
-      await ctx.api.editMessageText(ctx.chat.id, wait.message_id, `Нашёл ${r.items.length} строк, итого *${fmt(r.total)} г*\n\n${lines}${warn}\n\nЧто с этим сделать?`, { parse_mode: "Markdown", reply_markup: kb });
+      kb.text("✍️ Ввести вручную", "file:manual").text("Отмена", "cancel");
+      await ctx.api.editMessageText(ctx.chat.id, wait.message_id,
+        `Нашёл ${r.items.length} строк, итого ${fmt(r.total)} г\n\n${lines}${warn}\n\nСейчас на складе ${fmt(stockOf(s))} г. Всё верно?`, { reply_markup: kb });
     } catch (e) {
-      await ctx.api.editMessageText(ctx.chat.id, wait.message_id, "Не удалось распознать: " + e.message).catch(() => {});
+      await ctx.api.editMessageText(ctx.chat.id, wait.message_id, "Не удалось распознать: " + e.message + "\nМожно ввести вручную — напиши число граммов.").catch(() => {});
+      setS(ctx, { flow: "supply" });
     } finally { clearInterval(typing); }
   };
   bot.on("message:document", (ctx) => {
@@ -478,18 +751,235 @@ if (BOT_TOKEN) {
     const mode = ctx.match[1];
     const total = mode === "doc" ? r.docTotal : r.total;
     const s = await mutate((s) => {
-      if (mode === "add") addMove(s, { type: "supply", grams: total, note: "накладная (бот)" });
-      else { const diff = total - stockOf(s); if (diff) addMove(s, { type: "adjust", grams: diff, note: "инвентаризация по файлу (бот)" }); }
+      if (mode === "replace") {
+        const diff = total - stockOf(s);
+        s.inventories = s.inventories || [];
+        s.inventories.push({ id: "i" + Date.now(), date: iso(Date.now()), kind: "main", actual: total, calc: stockOf(s), diff });
+        if (diff) pushLedger(s, { type: "inventory", grams: diff, note: "инвентаризация по файлу (бот)" });
+      } else pushLedger(s, { type: "supply", grams: total, note: "накладная (бот)" });
     });
-    ctx.editMessageText(mode === "add" ? `➕ Поставка ${fmt(total)} г записана. На складе ${fmt(stockOf(s))} г` : `📋 Остаток установлен: ${fmt(stockOf(s))} г`);
+    ctx.editMessageText(mode === "replace" ? `📋 Остаток установлен: ${fmt(stockOf(s))} г` : `➕ Поставка ${fmt(total)} г записана. На складе ${fmt(stockOf(s))} г`);
   });
-  bot.callbackQuery("cancel", async (ctx) => { pending.delete(ctx.chat.id); await ctx.answerCallbackQuery(); ctx.editMessageText("Отменено."); });
+  bot.callbackQuery("file:manual", async (ctx) => {
+    pending.delete(ctx.chat.id);
+    setS(ctx, { flow: "supply" });
+    await ctx.answerCallbackQuery();
+    ctx.reply("Напиши, сколько граммов пришло.");
+  });
+  bot.callbackQuery("cancel", async (ctx) => { pending.delete(ctx.chat.id); clrS(ctx); await ctx.answerCallbackQuery(); ctx.editMessageText("Отменено."); });
+
+  // ═════════ СОТРУДНИКИ ═════════
+  bot.hears("👤 Сотрудники", async (ctx) => {
+    clrS(ctx);
+    const s = await loadState();
+    const linked = Object.values(s.people).filter((p) => p.role === "staff");
+    const kb = new InlineKeyboard();
+    s.employees.forEach((e) => {
+      const on = linked.some((p) => p.empId === e.id);
+      kb.text(`${on ? "✅" : "➕"} ${e.name}`, `emp:${e.id}`).row();
+    });
+    ctx.reply(s.employees.length
+      ? "Кому выдать доступ в бот? ✅ — уже подключён.\nНажми на имя, я дам код для сотрудника."
+      : "Штат пуст. Сначала добавь сотрудников — например, напиши «завтра Вова 1».", { reply_markup: kb });
+  });
+  bot.callbackQuery(/^emp:(.+)$/, async (ctx) => {
+    const empId = ctx.match[1];
+    const code = Math.random().toString(36).slice(2, 7).toUpperCase();
+    const s = await mutate((s) => { s.invites[code] = empId; });
+    const emp = s.employees.find((e) => e.id === empId);
+    await ctx.answerCallbackQuery();
+    ctx.reply(`Код для ${emp?.name}: ${code}\n\nПусть откроет бота и пришлёт:\n/join ${code}`);
+  });
+
+  // заявки сотрудников
+  bot.callbackQuery(/^req:(ok|no):(.+)$/, async (ctx) => {
+    const [, verdict, id] = ctx.match;
+    let req = null;
+    const s = await mutate((s) => {
+      req = s.requests.find((r) => r.id === id);
+      if (!req || req.status !== "new") return;
+      req.status = verdict === "ok" ? "ok" : "no";
+      if (verdict === "ok") applyRoster(s, req.items);
+    });
+    await ctx.answerCallbackQuery();
+    if (!req) return ctx.editMessageText("Заявка уже обработана.");
+    const list = req.items.map((i) => `${ruShort(i.day)} · ${KIND_LABEL[i.kind]}`).join(", ");
+    await ctx.editMessageText(`${verdict === "ok" ? "✅ Подтверждено" : "✖️ Отклонено"} · ${req.name}: ${list}`);
+    const tg = Object.entries(s.people).find(([, p]) => p.empId === req.empId);
+    if (tg) ctx.api.sendMessage(tg[0], verdict === "ok" ? `✅ Смены подтверждены: ${list}` : `✖️ Заявку отклонили: ${list}`).catch(() => {});
+  });
+
+  // ═════════ СВОБОДНЫЙ ТЕКСТ ═════════
+  const num = (t) => Number(String(t).replace(/\s|₽|руб\.?/gi, "").replace(",", ".").replace("−", "-"));
+  const parsePeriod = (t) => {
+    const parts = t.split(/[-–—]|по/).map((x) => x.trim()).filter(Boolean);
+    const a = dateFromWord(parts[0] || ""), b = parts[1] ? dateFromWord(parts[1]) : null;
+    return a ? { from: a, to: b || a } : null;
+  };
+
+  const applyRosterReply = async (ctx, items) => {
+    const s = await mutate((s) => { applyRoster(s, items); });
+    const done = items.map((it) => `${ruDay(it.day)} · ${KIND_LABEL[it.kind]} — ${empName(s, s.roster[`${it.day}|${it.kind}`]) || it.name}`);
+    await ctx.reply("🗓 Поставил в смену:\n" + done.join("\n"), { reply_markup: new InlineKeyboard().text("🗓 Показать график", "g:0") });
+  };
+
+  const runIntent = async (ctx, a) => {
+    const s = await loadState();
+    switch (a.action) {
+      case "roster": {
+        const items = (a.items || []).filter((i) => i.day && i.kind && i.name);
+        if (!items.length) return ctx.reply("Не понял, кого и когда ставить. Напиши, например: «завтра Вова 1, Денис 2».");
+        return applyRosterReply(ctx, items);
+      }
+      case "cash": {
+        const day = a.day || iso(Date.now());
+        if (a.cash == null || a.hookahs == null) {
+          setS(ctx, { flow: "cash", day, cash: a.cash ?? null, hookahs: a.hookahs ?? null });
+          return ctx.reply(a.cash == null
+            ? `Касса за ${ruDay(day)} — какая сумма?`
+            : `Касса за ${ruDay(day)}: ${fmt(a.cash)} ₽. Сколько было кальянов?`);
+        }
+        const s2 = await mutate((st) => setDayTotals(st, day, { cash: a.cash, hookahs: a.hookahs }));
+        return ctx.reply(`💰 Записал за ${ruDay(day)}: ${fmt(a.cash)} ₽ · ${a.hookahs} кальянов\n${shiftLine(s2, day)}`);
+      }
+      case "cash_show": {
+        const day = a.day || iso(Date.now());
+        return ctx.reply(cashText(s, day), { reply_markup: cashKb(s, day) });
+      }
+      case "supply": {
+        if (a.grams > 0) {
+          const s2 = await mutate((st) => pushLedger(st, { type: "supply", grams: Math.round(a.grams), note: "поставка (бот)" }));
+          return ctx.reply(`➕ Поставка ${fmt(a.grams)} г. На складе ${fmt(stockOf(s2))} г`);
+        }
+        setS(ctx, { flow: "supply" });
+        return ctx.reply("Пришла поставка. Загрузить из файла или ввести вручную?", {
+          reply_markup: new InlineKeyboard().text("📄 Из файла", "w:file").text("✍️ Вручную", "file:manual"),
+        });
+      }
+      case "sale":
+      case "writeoff": {
+        const mode = a.action === "sale" ? "sale" : "wo";
+        const p = a.from ? { from: a.from, to: a.to || a.from } : nextPeriod(s);
+        const q = {};
+        for (const it of a.items || []) if (BOWL_G[it.kind] && it.qty > 0) q[it.kind] = Math.round(it.qty);
+        if (!Object.keys(q).length) { await startQty(ctx, mode); return; }
+        setS(ctx, { flow: "qty", mode, i: BOWLS.length, q, from: p.from, to: p.to, reason: a.reason || (mode === "wo" ? "списание" : null) });
+        return finishQty(ctx);
+      }
+      case "adjust": {
+        if (!a.grams) return ctx.reply("На сколько граммов поправить? Например: «-300 просыпали».");
+        const s2 = await mutate((st) => pushLedger(st, { type: "adjust", grams: Math.round(a.grams), note: a.note || (a.grams > 0 ? "ручное добавление" : "ручное уменьшение") }));
+        return ctx.reply(`${a.grams > 0 ? "+" : ""}${fmt(a.grams)} г. На складе ${fmt(stockOf(s2))} г`);
+      }
+      case "inventory": {
+        const kind = a.kind || "mid";
+        if (a.actual == null) { setS(ctx, { flow: "inv", kind }); return ctx.reply(`${INV_KIND[kind]} инвентаризация. Сколько граммов по факту?`); }
+        return invConfirm(ctx, kind, Math.round(a.actual));
+      }
+      case "stock": return ctx.reply(stockText(s), { reply_markup: stockKb });
+      case "week": return ctx.reply(weekText(s, a.offset === 1 ? 1 : 0), { reply_markup: weekKb(a.offset === 1 ? 1 : 0) });
+      default:
+        return ctx.reply(
+          `Не понял${a.hint ? `: ${a.hint}` : ""}. Попробуй иначе или нажми кнопку.\n\n` +
+          "Что я умею словами:\n" +
+          "• «завтра Вова 2, Денис 1» — поставить смены\n" +
+          "• «касса за вчера 48000, 19 кальянов»\n" +
+          "• «пришла поставка табака»\n" +
+          "• «продали 14 классики и 3 фрукта за 1-5 сентября»\n" +
+          "• «списать 2 классики перезабивка»\n" +
+          "• «инвентаризация 7450»\n" +
+          "• «сколько на складе», «график на следующую неделю»",
+          { reply_markup: menu });
+    }
+  };
+
+  bot.on("message:text", async (ctx) => {
+    const text = ctx.message.text.trim();
+    const st = getS(ctx);
+
+    // шаги диалогов
+    if (st?.flow === "cash") {
+      const nums = (text.replace(/(\d)[ \u00a0](?=\d{3}\b)/g, "$1").match(/-?\d+/g) || []).map(Number);
+      let cash = st.cash ?? null, hookahs = st.hookahs ?? null;
+      if (cash == null && nums.length) cash = nums.shift();
+      if (hookahs == null && nums.length) hookahs = nums.shift();
+      if (cash == null) return ctx.reply("Нужна сумма кассы числом, например 52000.");
+      if (hookahs == null) { setS(ctx, { ...st, cash }); return ctx.reply(`Касса ${fmt(cash)} ₽. Сколько было кальянов?`); }
+      const day = st.day;
+      const s = await mutate((s) => setDayTotals(s, day, { cash, hookahs }));
+      clrS(ctx);
+      return ctx.reply(`💰 Записал за ${ruDay(day)}: ${fmt(cash)} ₽ · ${hookahs} кальянов\n${shiftLine(s, day)}`,
+        { reply_markup: new InlineKeyboard().text("✏️ Изменить", `c:set:${day}`).text("🗑 Удалить", `c:del:${day}`) });
+    }
+
+    if (st?.flow === "empname") {
+      const name = text.replace(/[^\p{L}\s-]/gu, "").trim();
+      if (!name) return ctx.reply("Напиши имя словами.");
+      const s = await mutate((s) => { applyRoster(s, [{ day: st.day, kind: st.kind, name }]); });
+      clrS(ctx);
+      return ctx.reply(`✅ ${ruDay(st.day)}\n${shiftLine(s, st.day)}`, { reply_markup: dayShiftKb(st.day) });
+    }
+
+    if (st?.flow === "adjust") {
+      const m = text.match(/^\s*(-?\d+)\s*(.*)$/);
+      if (!m) return ctx.reply("Нужно число, например 500 или -500.");
+      const grams = Number(m[1]);
+      const s = await mutate((s) => pushLedger(s, { type: "adjust", grams, note: m[2].trim() || (grams > 0 ? "ручное добавление" : "ручное уменьшение") }));
+      clrS(ctx);
+      return ctx.reply(`${grams > 0 ? "+" : ""}${fmt(grams)} г. На складе ${fmt(stockOf(s))} г`);
+    }
+
+    if (st?.flow === "supply") {
+      const g = Math.round(num(text));
+      if (!(g > 0)) return ctx.reply("Пришли фото/PDF накладной или напиши число граммов.");
+      const s = await mutate((s) => pushLedger(s, { type: "supply", grams: g, note: "поставка (бот)" }));
+      clrS(ctx);
+      return ctx.reply(`➕ Поставка ${fmt(g)} г. На складе ${fmt(stockOf(s))} г`);
+    }
+
+    if (st?.flow === "inv") {
+      if (st.step === "confirm") return ctx.reply("Нажми «Сохранить» или «Отмена».");
+      const g = Math.round(num(text));
+      if (!(g >= 0)) return ctx.reply("Нужно число граммов, например 7450.");
+      return invConfirm(ctx, st.kind, g);
+    }
+
+    if (st?.flow === "qty") {
+      if (st.step === "period") {
+        const p = parsePeriod(text);
+        if (!p) return ctx.reply("Не понял период. Напиши «5.09» или «1.09 - 5.09».");
+        setS(ctx, { ...st, from: p.from, to: p.to, step: null });
+        return askQty(ctx);
+      }
+      if (st.step === "reasonOwn") { setS(ctx, { ...st, reason: text, step: null }); return finishQty(ctx); }
+      const n = Math.round(num(text));
+      if (!(n >= 0)) return ctx.reply("Нужно число, например 12 или 0.");
+      const q = { ...st.q, [BOWLS[st.i][0]]: n };
+      const i = st.i + 1;
+      setS(ctx, { ...st, q, i });
+      if (i < BOWLS.length) return askQty(ctx);
+      return finishQty(ctx);
+    }
+
+    // свободный текст: сначала быстрый разбор смен, потом Claude
+    const quick = parseRoster(text);
+    if (quick.length && /\d|перв|втор|ноч|вечер|утр|день/i.test(text)) return applyRosterReply(ctx, quick);
+
+    const think = await ctx.reply("Секунду…");
+    try {
+      const a = await askClaude(ctx.state.st, text);
+      await ctx.api.deleteMessage(ctx.chat.id, think.message_id).catch(() => {});
+      return runIntent(ctx, a);
+    } catch (e) {
+      await ctx.api.editMessageText(ctx.chat.id, think.message_id,
+        "Не разобрал сообщение. Напиши проще — например «завтра Вова 1» или «касса 52000, 21 кальян» — либо нажми кнопку внизу.").catch(() => {});
+    }
+  });
 
   bot.catch((e) => console.error("bot error", e.error));
 
   const hookPath = `/tg/${BOT_TOKEN.split(":")[0]}`;
-  // отвечаем Telegram сразу, а обновление обрабатываем в фоне:
-  // распознавание накладной занимает больше 10 сек, и вебхук успевал отвалиться по таймауту
+  // отвечаем Telegram сразу, обработку делаем в фоне: распознавание длится дольше таймаута вебхука
   let botReady = bot.init().then(() => console.log("bot ready"));
   app.post(hookPath, (req, res) => {
     res.sendStatus(200);
@@ -499,7 +989,7 @@ if (BOT_TOKEN) {
     bot.api.setWebhook(`${RENDER_EXTERNAL_URL}${hookPath}`, { drop_pending_updates: true })
       .then(() => console.log("webhook set")).catch((e) => console.error("webhook", e.message));
   } else {
-    bot.start(); // локально — long polling
+    bot.start();
   }
 } else {
   console.warn("BOT_TOKEN не задан — бот выключен");
