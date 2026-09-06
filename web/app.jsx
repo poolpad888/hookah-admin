@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import React, { useState, useMemo, useEffect, useRef } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   AreaChart, Area, PieChart, Pie, Cell, LabelList,
@@ -94,6 +94,8 @@ export default function HookahAdmin() {
   const [dark, setDark] = useState(() => localStorage.getItem("hookah_dark") === "1");
   const [ledger, setLedger] = useState([]);
   const [bowlGrams, setBowlGrams] = useState({ regular: 22, premium: 30, electro: 0 });
+  const [daily, setDaily] = useState({}); // "дата|смена" → { cash, hookahs }
+  const [inventories, setInventories] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [authed, setAuthed] = useState(false);
   const [pwd, setPwd] = useState("");
@@ -115,6 +117,8 @@ export default function HookahAdmin() {
     setShift(s.shift || null);
     setClosedShifts(s.closedShifts || []);
     setLedger(s.ledger || []);
+    setDaily(s.daily || {});
+    setInventories(s.inventories || []);
     setTimeout(() => { applyRef.current = false; }, 0);
   };
   const load = async () => {
@@ -130,7 +134,7 @@ export default function HookahAdmin() {
     dirtyRef.current = true;
     const t = setTimeout(async () => {
       try {
-        const s = await api("PUT", "/api/state", { version: versionRef.current, employees, roster: shifts, prices, bowlGrams, shift, closedShifts, ledger });
+        const s = await api("PUT", "/api/state", { version: versionRef.current, employees, roster: shifts, prices, bowlGrams, shift, closedShifts, ledger, daily, inventories });
         versionRef.current = s.version; dirtyRef.current = false;
       } catch (e) {
         if (e.status === 409 && e.data) { applyState(e.data); setToast("Данные обновились из бота"); dirtyRef.current = false; }
@@ -138,7 +142,7 @@ export default function HookahAdmin() {
       }
     }, 600);
     return () => clearTimeout(t);
-  }, [employees, shifts, prices, bowlGrams, shift, closedShifts, ledger]);
+  }, [employees, shifts, prices, bowlGrams, shift, closedShifts, ledger, daily, inventories]);
 
   // подхватывать изменения из бота
   useEffect(() => {
@@ -213,10 +217,9 @@ export default function HookahAdmin() {
 
       <main style={{ padding: "8px 24px 40px", maxWidth: 1240, margin: "0 auto" }}>
         {view === "tobacco"
-          ? <TobaccoView setToast={setToast} ledger={ledger} setLedger={setLedger} />
+          ? <TobaccoView setToast={setToast} ledger={ledger} setLedger={setLedger} daily={daily} inventories={inventories} setInventories={setInventories} />
           : <StaffView employees={employees} setEmployees={setEmployees} shifts={shifts} setShifts={setShifts} setToast={setToast}
-              prices={prices} setPrices={setPrices} shift={shift} setShift={setShift} closedShifts={closedShifts} setClosedShifts={setClosedShifts}
-              setLedger={setLedger} bowlGrams={bowlGrams} setBowlGrams={setBowlGrams} />}
+              daily={daily} setDaily={setDaily} closedShifts={closedShifts} />}
       </main>
 
       {toast && (
@@ -227,11 +230,17 @@ export default function HookahAdmin() {
 }
 
 
-// ---------- шахматка занятости смен ----------
-function Heatmap({ shifts, empById, weeks = 6 }) {
+const fmtMoney = (n) => Math.round(n || 0).toLocaleString("ru-RU") + " ₽";
+const SHIFT_LABEL = { day: "1-я смена", night: "2-я смена" };
+const shiftHoursOf = (kind, d) => kind === "day" ? "11:00–23:00" : ([5, 6].includes(d.getDay()) ? "16:00–04:00" : "16:00–02:00");
+const dkey = (day, kind) => `${day}|${kind}`;
+const fmtTime = (ts) => new Date(ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+
+// ---------- горизонтальная шахматка: строки — недели, столбцы — дни ----------
+function Heatmap({ shifts, empById, weeks = 4 }) {
   const [hover, setHover] = useState(null);
-  const start = addDays(mondayOf(TODAY), -(weeks - 2) * 7);
-  const cols = Array.from({ length: weeks }, (_, w) => Array.from({ length: 7 }, (_, i) => addDays(start, w * 7 + i)));
+  const start = mondayOf(TODAY);
+  const rows = Array.from({ length: weeks }, (_, w) => Array.from({ length: 7 }, (_, i) => addDays(start, w * 7 + i)));
   const LEV = [
     { bg: PAL.lowBg, br: PAL.line, label: "никого" },
     { bg: PAL.sun, br: PAL.sun, label: "одна смена" },
@@ -239,90 +248,341 @@ function Heatmap({ shifts, empById, weeks = 6 }) {
   ];
   const info = (d) => {
     const key = iso(d);
-    const a = empById[shifts[`${key}|day`]], b = empById[shifts[`${key}|night`]];
+    const a = empById[shifts[dkey(key, "day")]], b = empById[shifts[dkey(key, "night")]];
     return { n: (a ? 1 : 0) + (b ? 1 : 0), a, b, key };
   };
   return (
-    <div style={{ position: "relative" }}>
-      <div style={{ display: "flex", gap: 5, overflowX: "auto", paddingBottom: 4 }}>
-        <div style={{ display: "grid", gridTemplateRows: "repeat(7, 22px)", gap: 5, marginRight: 2 }}>
-          {DAYS_RU.map((d) => <div key={d} style={{ fontSize: 11, color: PAL.mute, lineHeight: "22px", fontWeight: 600 }}>{d}</div>)}
-        </div>
-        {cols.map((week, wi) => (
-          <div key={wi} style={{ display: "grid", gridTemplateRows: "repeat(7, 22px)", gap: 5 }}>
+    <div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5, marginBottom: 5 }}>
+        {DAYS_RU.map((d) => <div key={d} style={{ fontSize: 11, color: PAL.mute, fontWeight: 600, textAlign: "center" }}>{d}</div>)}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
+        {rows.map((week, wi) => (
+          <div key={wi} style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 5 }}>
             {week.map((d) => {
               const { n } = info(d);
               const today = iso(d) === iso(TODAY);
               return (
-                <div key={iso(d)}
-                  onMouseEnter={() => setHover(iso(d))} onMouseLeave={() => setHover(null)} onClick={() => setHover(iso(d))}
-                  style={{ width: 22, height: 22, borderRadius: 6, background: LEV[n].bg, border: today ? `2px solid ${PAL.ink}` : `1px solid ${LEV[n].br}`, cursor: "default" }} />
+                <div key={iso(d)} onMouseEnter={() => setHover(iso(d))} onMouseLeave={() => setHover(null)} onClick={() => setHover(iso(d))}
+                  style={{ height: 26, borderRadius: 7, background: LEV[n].bg, border: today ? `2px solid ${PAL.ink}` : `1px solid ${LEV[n].br}`, display: "grid", placeItems: "center", fontSize: 10, fontWeight: 700, color: n ? PAL.ink : PAL.mute }}>
+                  {d.getDate()}
+                </div>
               );
             })}
           </div>
         ))}
       </div>
-      <div style={{ marginTop: 8, minHeight: 36, display: "flex", alignItems: "center", padding: "8px 12px", borderRadius: 10, background: PAL.mintPale, fontSize: 13 }}>
+      <div style={{ marginTop: 8, minHeight: 34, display: "flex", alignItems: "center", padding: "6px 10px", borderRadius: 10, background: PAL.mintPale, fontSize: 12 }}>
         {(() => {
-          const key = hover || iso(TODAY);
-          const d = new Date(key + "T12:00:00"); const { a, b } = info(d);
+          const key = hover || iso(TODAY); const d = new Date(key + "T12:00:00"); const { a, b } = info(d);
           return (
             <span>
               <b>{DAYS_RU[(d.getDay() + 6) % 7]}, {fmtShort(d)}</b>
-              {!hover && <span style={{ color: PAL.mute }}> (сегодня)</span>}
-              <span style={{ marginLeft: 10 }}>1-я: {a ? a.name : <span style={{ color: PAL.coral }}>никого</span>}</span>
-              <span style={{ marginLeft: 12 }}>2-я: {b ? b.name : <span style={{ color: PAL.coral }}>никого</span>}</span>
+              <span style={{ marginLeft: 8 }}>1-я: {a ? a.name : <span style={{ color: PAL.coral }}>—</span>}</span>
+              <span style={{ marginLeft: 10 }}>2-я: {b ? b.name : <span style={{ color: PAL.coral }}>—</span>}</span>
             </span>
           );
         })()}
       </div>
-      <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 8, fontSize: 12, color: PAL.mute }}>
-        {LEV.map((l, i) => (
-          <span key={i} className="flex items-center gap-1"><span style={{ width: 12, height: 12, borderRadius: 4, background: l.bg, border: `1px solid ${l.br}`, display: "inline-block" }} />{l.label}</span>
-        ))}
+      <div className="flex items-center gap-3 flex-wrap" style={{ marginTop: 6, fontSize: 11, color: PAL.mute }}>
+        {LEV.map((l, i) => <span key={i} className="flex items-center gap-1"><span style={{ width: 11, height: 11, borderRadius: 3, background: l.bg, border: `1px solid ${l.br}`, display: "inline-block" }} />{l.label}</span>)}
       </div>
     </div>
   );
 }
 
+// ---------- ввод кассы и кальянов за смену ----------
+function ShiftEntry({ day, kind, emp, employees, onEmp, rec, onSave, setToast }) {
+  const [edit, setEdit] = useState(false);
+  const [cash, setCash] = useState("");
+  const [hk, setHk] = useState("");
+  useEffect(() => { setCash(rec?.cash ?? ""); setHk(rec?.hookahs ?? ""); }, [rec?.cash, rec?.hookahs]);
+  const filled = !!(rec && (rec.cash || rec.hookahs));
+  const save = () => {
+    const c = Number(cash) || 0, h = Number(hk) || 0;
+    if (!c && !h) return;
+    onSave({ cash: c, hookahs: h }); setEdit(false); setToast("Записано");
+  };
+  return (
+    <div style={{ background: PAL.white, border: `1px solid ${PAL.line}`, borderRadius: 14, padding: 14, flex: "1 1 260px" }}>
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div>
+          <div style={{ fontWeight: 800, fontSize: 15 }}>{SHIFT_LABEL[kind]}</div>
+          <div style={{ fontSize: 12, color: PAL.mute }}>{shiftHoursOf(kind, new Date(day + "T12:00:00"))}</div>
+        </div>
+        {emp && <span style={{ width: 10, height: 10, borderRadius: 5, background: emp.color || PAL.mint }} />}
+      </div>
+      <select value={emp?.id || ""} onChange={(e) => onEmp(e.target.value)} style={{ ...STY.input, fontWeight: 700, marginBottom: 10 }}>
+        <option value="">кто на смене…</option>
+        {employees.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+      </select>
+      {filled && !edit ? (
+        <div className="flex items-center gap-4 flex-wrap">
+          <div><div style={{ fontSize: 11, color: PAL.mute }}>касса</div><div style={{ fontSize: 22, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(rec.cash)}</div></div>
+          <div><div style={{ fontSize: 11, color: PAL.mute }}>кальянов</div><div style={{ fontSize: 22, fontWeight: 800 }}>{rec.hookahs}</div></div>
+          <div style={{ marginLeft: "auto" }}><Btn small tone="ghost" onClick={() => setEdit(true)}>Изменить</Btn></div>
+        </div>
+      ) : (
+        <div className="flex items-end gap-2 flex-wrap">
+          <label style={{ flex: "1 1 110px" }}>
+            <div style={{ fontSize: 11, color: PAL.mute, marginBottom: 3 }}>касса, ₽</div>
+            <input type="number" inputMode="numeric" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="0" style={STY.input} />
+          </label>
+          <label style={{ flex: "1 1 90px" }}>
+            <div style={{ fontSize: 11, color: PAL.mute, marginBottom: 3 }}>кальянов</div>
+            <input type="number" inputMode="numeric" value={hk} onChange={(e) => setHk(e.target.value)} placeholder="0" style={STY.input} />
+          </label>
+          <Btn onClick={save}>Сохранить</Btn>
+          {filled && <Btn tone="ghost" onClick={() => setEdit(false)}>Отмена</Btn>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ====================================================================
-function StaffView({ employees, setEmployees, shifts, setShifts, setToast, prices, setPrices, shift, setShift, closedShifts, setClosedShifts, setLedger, bowlGrams, setBowlGrams }) {
+function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily, setDaily }) {
   const [weekOffset, setWeekOffset] = useState(0);
   const [newName, setNewName] = useState("");
-  const [count, setCount] = useState(employees.length);
 
   const monday = addDays(mondayOf(TODAY), weekOffset * 7);
   const days = Array.from({ length: 7 }, (_, i) => addDays(monday, i));
-  const SHIFTS = [["day", "1-я смена", "11:00–23:00"], ["night", "2-я смена", "16:00–02:00"]];
-  const shiftHours = (kind, d) => kind === "day" ? "11:00–23:00" : ([5, 6].includes(d.getDay()) ? "16:00–04:00" : "16:00–02:00");
-
+  const SHIFTS = [["day", "1-я смена"], ["night", "2-я смена"]];
   const empById = Object.fromEntries(employees.map((e) => [e.id, e]));
-  const setCell = (day, kind, empId) => setShifts((s) => ({ ...s, [`${day}|${kind}`]: empId || undefined }));
+  const setCell = (day, kind, empId) => setShifts((s) => ({ ...s, [dkey(day, kind)]: empId || undefined }));
+  const setRec = (day, kind, rec) => setDaily((d) => ({ ...d, [dkey(day, kind)]: rec }));
+
+  const today = iso(TODAY), tomorrow = iso(addDays(TODAY, 1));
 
   const addEmployee = () => {
     if (!newName.trim()) return;
-    setEmployees((es) => [...es, { id: "e" + Date.now(), name: newName.trim(), color: EMP_COLORS[es.length % EMP_COLORS.length] }]);
+    setEmployees((es) => [...es, { id: "e" + Date.now(), name: newName.trim(), color: EMP_COLORS[es.length % EMP_COLORS.length], rate: 10 }]);
     setNewName(""); setToast("Сотрудник добавлен");
   };
   const removeEmployee = (id) => {
     setEmployees((es) => es.filter((e) => e.id !== id));
     setShifts((s) => { const n = { ...s }; Object.keys(n).forEach((k) => { if (n[k] === id) delete n[k]; }); return n; });
   };
-  const applyCount = () => {
-    const n = Math.max(1, Math.min(20, Number(count) || 1));
-    setEmployees((es) => {
-      if (n <= es.length) return es.slice(0, n);
-      const add = Array.from({ length: n - es.length }, (_, i) => ({ id: "e" + Date.now() + i, name: `Сотрудник ${es.length + i + 1}`, color: EMP_COLORS[(es.length + i) % EMP_COLORS.length] }));
-      return [...es, ...add];
+  const patchEmp = (id, patch) => setEmployees((es) => es.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+
+  const records = useMemo(() => Object.entries(daily || {}).map(([k, v]) => {
+    const [day, kind] = k.split("|");
+    return { day, kind, emp: empById[shifts[k]], cash: Number(v?.cash) || 0, hookahs: Number(v?.hookahs) || 0 };
+  }).filter((r) => r.cash || r.hookahs), [daily, shifts, employees]);
+
+  const month = TODAY.getMonth(), year = TODAY.getFullYear();
+  const inMonth = (day) => { const d = new Date(day + "T12:00:00"); return d.getMonth() === month && d.getFullYear() === year; };
+
+  const salary = employees.map((e) => {
+    const mine = records.filter((r) => r.emp?.id === e.id && inMonth(r.day));
+    const cash = mine.reduce((a, r) => a + r.cash, 0);
+    const rate = Number(e.rate) || 0;
+    return { id: e.id, name: e.name, color: e.color, rate, смен: mine.length, касса: cash, зп: Math.round(cash * rate / 100) };
+  });
+
+  const perf = employees.map((e) => {
+    const mine = records.filter((r) => r.emp?.id === e.id);
+    return { name: e.name, color: e.color, смен: mine.length, "средняя касса": mine.length ? Math.round(mine.reduce((a, r) => a + r.cash, 0) / mine.length) : 0 };
+  }).filter((p) => p.смен).sort((a, b) => b["средняя касса"] - a["средняя касса"]);
+
+  const byDay = useMemo(() => {
+    const keys = [...new Set(records.map((r) => r.day))].sort().reverse().slice(0, 30);
+    return keys.map((day) => {
+      const two = ["day", "night"].map((kind) => {
+        const rec = (daily || {})[dkey(day, kind)]; const emp = empById[shifts[dkey(day, kind)]];
+        return rec && (rec.cash || rec.hookahs) ? { kind, emp, cash: Number(rec.cash) || 0, hookahs: Number(rec.hookahs) || 0 } : null;
+      });
+      const cash = two.reduce((a, x) => a + (x?.cash || 0), 0);
+      const hookahs = two.reduce((a, x) => a + (x?.hookahs || 0), 0);
+      const pool = two.reduce((a, x) => a + (x ? x.cash * (Number(x.emp?.rate) || 0) / 100 : 0), 0);
+      return { day, two, cash, hookahs, pool: Math.round(pool), names: two.filter(Boolean).map((x) => x.emp?.name || "—") };
     });
-    setToast(`Штат: ${n}`);
-  };
-  const renameEmployee = (id, name) => setEmployees((es) => es.map((e) => (e.id === id ? { ...e, name } : e)));
+  }, [records, daily, shifts, employees]);
 
-  const weekKeys = days.flatMap((d) => SHIFTS.map(([k]) => `${iso(d)}|${k}`));
-  const weekStats = employees.map((e) => ({ name: e.name, color: e.color, смены: weekKeys.filter((k) => shifts[k] === e.id).length }));
-  const empty = weekKeys.filter((k) => !shifts[k]).length;
+  const chart = [...byDay].slice(0, 14).reverse().map((r) => ({
+    label: fmtShort(new Date(r.day + "T12:00:00")),
+    "1-я смена": r.two[0]?.cash || 0, "2-я смена": r.two[1]?.cash || 0,
+  }));
 
+  const monthTot = records.filter((r) => inMonth(r.day)).reduce((a, r) => ({ cash: a.cash + r.cash, hk: a.hk + r.hookahs }), { cash: 0, hk: 0 });
+  const isToday = (d) => iso(d) === today;
+  const th = { padding: "8px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap" };
+  const td = { padding: "8px", borderTop: `1px solid ${PAL.line}`, fontSize: 13 };
+  const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
+
+  return (
+    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
+      <Card style={{ gridColumn: "span 8" }} title={`Сегодня · ${DAYS_RU[(TODAY.getDay() + 6) % 7]}, ${fmtShort(TODAY)}`}
+        aside={<span style={{ fontSize: 12, color: PAL.mute }}>касса и кальяны за смену</span>}>
+        <div className="flex gap-3 flex-wrap">
+          {SHIFTS.map(([kind]) => (
+            <ShiftEntry key={kind} day={today} kind={kind} employees={employees} setToast={setToast}
+              emp={empById[shifts[dkey(today, kind)]]}
+              onEmp={(id) => setCell(today, kind, id)}
+              rec={(daily || {})[dkey(today, kind)]}
+              onSave={(rec) => setRec(today, kind, rec)} />
+          ))}
+        </div>
+        <div className="flex gap-2 flex-wrap" style={{ marginTop: 12 }}>
+          <Pill color={PAL.mint}>сегодня: {fmtMoney(((daily || {})[dkey(today, "day")]?.cash || 0) + ((daily || {})[dkey(today, "night")]?.cash || 0))}</Pill>
+          <Pill color={PAL.sky}>кальянов: {((daily || {})[dkey(today, "day")]?.hookahs || 0) + ((daily || {})[dkey(today, "night")]?.hookahs || 0)}</Pill>
+          <Pill color={PAL.lilac}>{MONTHS_RU[month]}: {fmtMoney(monthTot.cash)} · {monthTot.hk} шт</Pill>
+        </div>
+      </Card>
+
+      <div style={{ gridColumn: "span 4", display: "flex", flexDirection: "column", gap: 16 }}>
+        <Card title="Завтра">
+          <div className="flex flex-col gap-2">
+            {SHIFTS.map(([kind]) => {
+              const e = empById[shifts[dkey(tomorrow, kind)]];
+              return (
+                <div key={kind} className="flex items-center justify-between gap-2" style={{ padding: "8px 12px", borderRadius: 10, background: e ? PAL.mintPale : PAL.lowBg }}>
+                  <span style={{ fontSize: 13, color: PAL.mute }}>{SHIFT_LABEL[kind]}</span>
+                  <b style={{ color: e ? PAL.ink : PAL.coral }}>{e ? e.name : "никого"}</b>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+        <Card title="Занятость смен" aside={<span style={{ fontSize: 11, color: PAL.mute }}>4 недели</span>}>
+          <Heatmap shifts={shifts} empById={empById} />
+        </Card>
+      </div>
+
+      <Card style={{ gridColumn: "span 12" }}
+        title={`Неделя ${fmtShort(days[0])} — ${fmtShort(days[6])}`}
+        aside={<div className="flex gap-2"><Btn small tone="ghost" onClick={() => setWeekOffset((w) => w - 1)}>← пред.</Btn><Btn small tone="ghost" onClick={() => setWeekOffset(0)}>Сегодня</Btn><Btn small tone="ghost" onClick={() => setWeekOffset((w) => w + 1)}>след. →</Btn></div>}>
+        <div style={{ overflowX: "auto" }}>
+          <div className="grid gap-2" style={{ gridTemplateColumns: "110px repeat(7, minmax(120px, 1fr))", minWidth: 960 }}>
+            <div />
+            {days.map((d, i) => (
+              <div key={i} style={{ textAlign: "center", padding: "6px 0", borderRadius: 10, background: isToday(d) ? PAL.panel : "transparent", color: isToday(d) ? PAL.panelText : PAL.ink }}>
+                <div style={{ fontWeight: 800, fontSize: 15 }}>{DAYS_RU[i]}</div>
+                <div style={{ fontSize: 12, color: isToday(d) ? PAL.mintPale : PAL.mute }}>{fmtShort(d)}</div>
+              </div>
+            ))}
+            {SHIFTS.map(([kind, label]) => (
+              <React.Fragment key={kind}>
+                <div style={{ alignSelf: "center" }}>
+                  <div style={{ fontWeight: 700 }}>{label}</div>
+                  <div style={{ fontSize: 12, color: PAL.mute }}>{kind === "day" ? "11:00–23:00" : "16:00–02:00, пт/сб до 04:00"}</div>
+                </div>
+                {days.map((d) => {
+                  const key = dkey(iso(d), kind); const e = empById[shifts[key]]; const rec = (daily || {})[key];
+                  return (
+                    <div key={key} style={{ borderRadius: 12, padding: 6, background: e ? (e.color || PAL.mint) + "22" : PAL.paper, border: `1.5px ${e ? "solid " + (e.color || PAL.mint) : "dashed " + PAL.line}`, minHeight: 58, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
+                      {e && <div style={{ fontWeight: 800, fontSize: 14, textAlign: "center" }}>{e.name}</div>}
+                      {rec?.cash ? <div style={{ fontSize: 11, textAlign: "center", color: PAL.mintDeep, fontWeight: 700 }}>{fmtMoney(rec.cash)} · {rec.hookahs} шт</div> : null}
+                      <select value={shifts[key] || ""} onChange={(ev) => setCell(iso(d), kind, ev.target.value)}
+                        style={{ ...STY.input, padding: "4px 6px", fontSize: 12, background: PAL.cellBg, border: "none", textAlign: "center", color: e ? PAL.mute : PAL.ink }}>
+                        <option value="">{e ? "заменить…" : "назначить…"}</option>
+                        {employees.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+                      </select>
+                    </div>
+                  );
+                })}
+              </React.Fragment>
+            ))}
+          </div>
+        </div>
+      </Card>
+
+      <Card style={{ gridColumn: "span 12" }} title="Кальянные смены по дням"
+        aside={<span style={{ fontSize: 12, color: PAL.mute }}>касса, кальяны и бонусный пул</span>}>
+        {chart.length > 0 && (
+          <ResponsiveContainer width="100%" height={200}>
+            <BarChart data={chart} margin={{ left: -10, right: 10, top: 16 }}>
+              <CartesianGrid vertical={false} stroke={PAL.line} />
+              <XAxis dataKey="label" tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={STY.tip} formatter={(v) => fmtMoney(v)} />
+              <Bar dataKey="1-я смена" stackId="a" fill={PAL.sun} isAnimationActive={false} />
+              <Bar dataKey="2-я смена" stackId="a" fill={PAL.ink} radius={[6, 6, 0, 0]} isAnimationActive={false} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+        <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto", marginTop: 8 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
+            <thead><tr>
+              <th style={th}>День</th><th style={th}>Смена</th>
+              <th style={{ ...th, textAlign: "right" }}>Касса</th>
+              <th style={{ ...th, textAlign: "right" }}>Кальянов</th>
+              <th style={{ ...th, textAlign: "right" }}>Бонусный пул</th>
+            </tr></thead>
+            <tbody>
+              {byDay.length === 0 && <tr><td style={{ ...td, color: PAL.mute }} colSpan={5}>Пока нет данных — заполни кассу за сегодня.</td></tr>}
+              {byDay.map((r) => {
+                const d = new Date(r.day + "T12:00:00");
+                return (
+                  <tr key={r.day} style={{ background: r.day === today ? PAL.mintPale : "transparent" }}>
+                    <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap" }}>{DAYS_RU[(d.getDay() + 6) % 7]}, {fmtShort(d)}</td>
+                    <td style={td}>{r.names.join(" и ") || "—"}</td>
+                    <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(r.cash)}</td>
+                    <td style={{ ...num, fontWeight: 700 }}>{r.hookahs}</td>
+                    <td style={{ ...num, color: PAL.lilac, fontWeight: 700 }}>{fmtMoney(r.pool)}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      <Card title="Штат и зарплата" style={{ gridColumn: "span 7" }} aside={<span style={{ fontSize: 12, color: PAL.mute }}>% от кассы · {MONTHS_RU[month]}</span>}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
+            <thead><tr>
+              <th style={th}>Сотрудник</th><th style={{ ...th, textAlign: "right" }}>%</th>
+              <th style={{ ...th, textAlign: "right" }}>Смен</th><th style={{ ...th, textAlign: "right" }}>Касса</th><th style={{ ...th, textAlign: "right" }}>ЗП</th><th style={th} />
+            </tr></thead>
+            <tbody>
+              {salary.map((s) => (
+                <tr key={s.id}>
+                  <td style={td}>
+                    <div className="flex items-center gap-2">
+                      <span style={{ width: 10, height: 10, borderRadius: 5, background: s.color || PAL.mint, flexShrink: 0 }} />
+                      <input value={s.name} onChange={(e) => patchEmp(s.id, { name: e.target.value })} style={{ ...STY.input, fontWeight: 600, padding: "4px 8px" }} />
+                    </div>
+                  </td>
+                  <td style={num}><input type="number" value={s.rate} onChange={(e) => patchEmp(s.id, { rate: Number(e.target.value) || 0 })} style={{ ...STY.input, width: 62, padding: "4px 6px", textAlign: "right" }} /></td>
+                  <td style={num}>{s.смен}</td>
+                  <td style={{ ...num, color: PAL.mute }}>{fmtMoney(s.касса)}</td>
+                  <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(s.зп)}</td>
+                  <td style={{ ...td, textAlign: "right" }}><Btn small tone="coral" onClick={() => removeEmployee(s.id)}>×</Btn></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <div className="flex gap-2 mt-3">
+          <input placeholder="Имя нового сотрудника" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addEmployee()} style={STY.input} />
+          <Btn onClick={addEmployee} disabled={!newName.trim()}>Добавить</Btn>
+        </div>
+      </Card>
+
+      <Card title="Кто делает кассу" style={{ gridColumn: "span 5" }} aside={<span style={{ fontSize: 12, color: PAL.mute }}>средняя касса за смену</span>}>
+        {perf.length === 0 ? <div style={{ fontSize: 13, color: PAL.mute }}>Данных пока нет.</div> : (
+          <ResponsiveContainer width="100%" height={Math.max(160, perf.length * 42)}>
+            <BarChart data={perf} layout="vertical" margin={{ left: 8, right: 70 }}>
+              <XAxis type="number" tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} />
+              <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 13, fill: PAL.ink, fontWeight: 600 }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={STY.tip} formatter={(v, n, p) => [`${fmtMoney(v)} · ${p.payload.смен} смен`, "средняя касса"]} />
+              <Bar dataKey="средняя касса" radius={[0, 8, 8, 0]} isAnimationActive={false}>
+                {perf.map((d, i) => <Cell key={i} fill={d.color || BRAND_COLORS[i % BRAND_COLORS.length]} />)}
+                <LabelList dataKey="средняя касса" position="right" formatter={(v) => fmtMoney(v)} style={{ fontSize: 11, fill: PAL.ink, fontWeight: 700 }} />
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </Card>
+
+      <MonthShifts employees={employees} shifts={shifts} monday={monday} />
+    </div>
+  );
+}
+
+// ---------- нижний блок: смены за месяц ----------
+function MonthShifts({ employees, shifts, monday }) {
   const monthStats = useMemo(() => {
     const y = monday.getFullYear(), m = monday.getMonth();
     return employees.map((e) => {
@@ -336,354 +596,19 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, price
     });
   }, [employees, shifts, monday]);
 
-  const isToday = (d) => iso(d) === iso(TODAY);
-
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
-      {/* ---- текущая смена ---- */}
-      <ShiftPanel employees={employees} prices={prices} setPrices={setPrices} shift={shift} setShift={setShift} closedShifts={closedShifts} setClosedShifts={setClosedShifts} setToast={setToast} shiftHours={shiftHours} setLedger={setLedger} bowlGrams={bowlGrams} setBowlGrams={setBowlGrams} />
-
-      <div style={{ gridColumn: "1 / -1", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-        <Pill color={PAL.mint}>{employees.length} в штате</Pill>
-        <Pill color={empty ? PAL.coral : PAL.sky}>{empty ? `${empty} смен без сотрудника` : "все смены закрыты"}</Pill>
-      </div>
-
-      <Card style={{ gridColumn: "span 12" }} title="Занятость смен" aside={<span style={{ fontSize: 12, color: PAL.mute }}>6 недель · строки — дни недели</span>}>
-        <Heatmap shifts={shifts} empById={empById} />
-      </Card>
-
-      {/* график недели */}
-      <Card style={{ gridColumn: "span 12" }}
-        title={`Неделя ${fmtShort(days[0])} — ${fmtShort(days[6])}`}
-        aside={<div className="flex gap-2"><Btn small tone="ghost" onClick={() => setWeekOffset((w) => w - 1)}>← пред.</Btn><Btn small tone="ghost" onClick={() => setWeekOffset(0)}>Сегодня</Btn><Btn small tone="ghost" onClick={() => setWeekOffset((w) => w + 1)}>след. →</Btn></div>}>
-        <div style={{ overflowX: "auto" }}>
-          <div className="grid gap-2" style={{ gridTemplateColumns: "110px repeat(7, minmax(120px, 1fr))", minWidth: 960 }}>
-            <div />
-            {days.map((d, i) => (
-              <div key={i} style={{ textAlign: "center", padding: "6px 0", borderRadius: 10, background: isToday(d) ? PAL.panel : "transparent", color: isToday(d) ? PAL.panelText : PAL.ink }}>
-                <div style={{ fontWeight: 800, fontSize: 15 }}>{DAYS_RU[i]}</div>
-                <div style={{ fontSize: 12, color: isToday(d) ? PAL.mintPale : PAL.mute }}>{fmtShort(d)}</div>
-              </div>
-            ))}
-            {SHIFTS.map(([kind, label, hours]) => (
-              <>
-                <div key={kind} style={{ alignSelf: "center" }}>
-                  <div style={{ fontWeight: 700 }}>{label}</div>
-                  <div style={{ fontSize: 12, color: PAL.mute }}>{kind === "day" ? hours : "16:00–02:00, пт/сб до 04:00"}</div>
-                </div>
-                {days.map((d) => {
-                  const key = `${iso(d)}|${kind}`; const e = empById[shifts[key]];
-                  return (
-                    <div key={key} style={{ borderRadius: 12, padding: 6, background: e ? e.color + "22" : PAL.paper, border: `1.5px ${e ? "solid " + e.color : "dashed " + PAL.line}`, minHeight: 58, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
-                      {e && <div style={{ fontWeight: 800, fontSize: 14, textAlign: "center" }}>{e.name}</div>}
-                      <select value={shifts[key] || ""} onChange={(ev) => setCell(iso(d), kind, ev.target.value)}
-                        style={{ ...STY.input, padding: "4px 6px", fontSize: 12, background: PAL.cellBg, border: "none", textAlign: "center", color: e ? PAL.mute : PAL.ink }}>
-                        <option value="">{e ? "заменить…" : "назначить…"}</option>
-                        {employees.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
-                      </select>
-                    </div>
-                  );
-                })}
-              </>
-            ))}
-          </div>
-        </div>
-      </Card>
-
-      {/* штат */}
-      <Card title="Штат" style={{ gridColumn: "span 5" }}>
-        <div className="flex gap-2 mb-3 items-center">
-          <span style={{ fontSize: 13, color: PAL.mute, whiteSpace: "nowrap" }}>Сколько сотрудников</span>
-          <input type="number" min={1} max={20} value={count} onChange={(e) => setCount(e.target.value)} style={{ ...STY.input, width: 70 }} />
-          <Btn small tone="ink" onClick={applyCount}>Применить</Btn>
-        </div>
-        <div className="flex flex-col gap-2">
-          {employees.map((e) => (
-            <div key={e.id} className="flex items-center gap-2">
-              <span style={{ width: 12, height: 12, borderRadius: 6, background: e.color, flexShrink: 0 }} />
-              <input value={e.name} onChange={(ev) => renameEmployee(e.id, ev.target.value)} style={{ ...STY.input, fontWeight: 600 }} />
-              <Btn small tone="coral" onClick={() => removeEmployee(e.id)}>×</Btn>
-            </div>
-          ))}
-        </div>
-        <div className="flex gap-2 mt-3">
-          <input placeholder="Имя нового сотрудника" value={newName} onChange={(e) => setNewName(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addEmployee()} style={STY.input} />
-          <Btn onClick={addEmployee} disabled={!newName.trim()}>Добавить</Btn>
-        </div>
-      </Card>
-
-      <Card title="Смены на этой неделе" style={{ gridColumn: "span 7" }}>
-        <ResponsiveContainer width="100%" height={Math.max(160, employees.length * 36)}>
-          <BarChart data={weekStats} layout="vertical" margin={{ left: 8, right: 30 }}>
-            <XAxis type="number" allowDecimals={false} tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} />
-            <YAxis type="category" dataKey="name" width={90} tick={{ fontSize: 13, fill: PAL.ink, fontWeight: 600 }} axisLine={false} tickLine={false} />
-            <Tooltip contentStyle={STY.tip} />
-            <Bar dataKey="смены" radius={[0, 8, 8, 0]} isAnimationActive={false}>
-              {weekStats.map((d, i) => <Cell key={i} fill={d.color} />)}
-              <LabelList dataKey="смены" position="right" style={{ fontSize: 12, fill: PAL.ink, fontWeight: 700 }} />
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
-      </Card>
-
-      <ShiftStats employees={employees} closedShifts={closedShifts} shift={shift} />
-
-      <Card title={`Смены за ${MONTHS_RU[monday.getMonth()]} — 1-я и 2-я`} style={{ gridColumn: "span 12" }}>
-        <ResponsiveContainer width="100%" height={220}>
-          <BarChart data={monthStats} margin={{ left: -10, right: 10, top: 16 }}>
-            <CartesianGrid vertical={false} stroke={PAL.line} />
-            <XAxis dataKey="name" tick={{ fontSize: 13, fill: PAL.ink, fontWeight: 600 }} axisLine={false} tickLine={false} />
-            <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} />
-            <Tooltip contentStyle={STY.tip} />
-            <Bar dataKey="день" stackId="a" fill={PAL.sun} isAnimationActive={false} />
-            <Bar dataKey="ночь" stackId="a" fill={PAL.ink} radius={[8, 8, 0, 0]} isAnimationActive={false} />
-          </BarChart>
-        </ResponsiveContainer>
-        <div className="flex gap-2 mt-2"><Pill color={PAL.sun}>1-я смена</Pill><Pill color={PAL.ink}>2-я смена</Pill></div>
-      </Card>
-    </div>
-  );
-}
-
-// ====================================================================
-const KINDS = [["regular", "Обычный"], ["premium", "Премиум"], ["electro", "Электронный"]];
-const DISCOUNTS = [0, 10, 15, 20, 30];
-const fmtMoney = (n) => n.toLocaleString("ru-RU") + " ₽";
-const fmtTime = (ts) => new Date(ts).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-
-function ShiftPanel({ employees, prices, setPrices, shift, setShift, closedShifts, setClosedShifts, setToast, shiftHours, setLedger, bowlGrams, setBowlGrams }) {
-  const [kind, setKind] = useState("regular");
-  const [disc, setDisc] = useState(0);
-  const [who, setWho] = useState(employees[0]?.id || "");
-  const [which, setWhich] = useState(new Date().getHours() < 16 ? "day" : "night");
-  const [editPrices, setEditPrices] = useState(false);
-  const [grams, setGrams] = useState(bowlGrams.regular);
-  const pickKind = (k) => { setKind(k); setGrams(bowlGrams[k]); };
-
-  const price = Math.round(prices[kind] * (1 - disc / 100));
-  const openShift = () => { setShift({ openedAt: Date.now(), kind: which, empId: who, sales: [] }); setToast("Смена открыта"); };
-  const closeShift = () => {
-    setClosedShifts((cs) => [{ ...shift, closedAt: Date.now() }, ...cs]);
-    setShift(null); setToast(`Смена закрыта: ${fmtMoney(total)}`);
-  };
-  const sell = () => {
-    const id = "s" + Date.now(); const g = Number(grams) || 0;
-    setShift((s) => ({ ...s, sales: [{ id, ts: Date.now(), kind, disc, price, grams: g }, ...s.sales] }));
-    if (g > 0 && setLedger) setLedger((L) => [...L, { id: "sh" + id, date: iso(TODAY), type: "sale", qty: 1, grams: -g, note: `смена: ${KINDS.find((k) => k[0] === kind)[1].toLowerCase()}` }]);
-    setToast(`${KINDS.find((k) => k[0] === kind)[1]} — ${fmtMoney(price)}${g ? `, −${g} г` : ""}`); setDisc(0);
-  };
-  const undo = (id) => { setShift((s) => ({ ...s, sales: s.sales.filter((x) => x.id !== id) })); if (setLedger) setLedger((L) => L.filter((l) => l.id !== "sh" + id)); };
-  const gramsTotal = (shift?.sales || []).reduce((s, x) => s + (x.grams || 0), 0);
-
-  const sales = shift?.sales || [];
-  const total = sales.reduce((s, x) => s + x.price, 0);
-  const counts = Object.fromEntries(KINDS.map(([k]) => [k, sales.filter((x) => x.kind === k).length]));
-  const discounted = sales.filter((x) => x.disc).length;
-  const emp = employees.find((e) => e.id === shift?.empId);
-  const last = closedShifts[0];
-
-  const kindBtn = (active, color) => ({ border: `2px solid ${active ? color : PAL.line}`, background: active ? color + "22" : PAL.white, color: PAL.ink, borderRadius: 12, padding: "12px 10px", fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit", textAlign: "center" });
-
-  return (
-    <section style={{ gridColumn: "1 / -1", background: PAL.panel, borderRadius: 22, padding: "22px 24px", color: PAL.panelText }}>
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <div>
-          <div style={{ fontSize: 13, color: PAL.mintPale, opacity: .8 }}>Текущая смена</div>
-          {shift ? (
-            <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: -0.5 }}>
-              {shift.kind === "day" ? "1-я смена" : "2-я смена"} · {emp?.name || "—"}
-              <span style={{ fontSize: 14, fontWeight: 600, color: PAL.mintPale, marginLeft: 10 }}>открыта в {fmtTime(shift.openedAt)} · {shiftHours(shift.kind, new Date(shift.openedAt))}</span>
-            </div>
-          ) : (
-            <div style={{ fontSize: 28, fontWeight: 800, letterSpacing: -0.5, color: PAL.mintPale }}>Смена не открыта</div>
-          )}
-        </div>
-        {shift ? (
-          <div className="flex items-center gap-4">
-            <div style={{ textAlign: "right" }}>
-              <div style={{ fontSize: 13, color: PAL.mintPale, opacity: .8 }}>Касса за смену</div>
-              <div style={{ fontSize: 32, fontWeight: 800, color: PAL.mint, letterSpacing: -0.5 }}>{fmtMoney(total)}</div>
-            </div>
-            <Btn tone="coral" onClick={closeShift}>Закрыть смену</Btn>
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-2">
-            <select value={which} onChange={(e) => setWhich(e.target.value)} style={{ ...STY.input, width: "auto" }}>
-              <option value="day">1-я смена, 11:00–23:00</option>
-              <option value="night">2-я смена, 16:00–{[5, 6].includes(new Date().getDay()) ? "04:00" : "02:00"}</option>
-            </select>
-            <select value={who} onChange={(e) => setWho(e.target.value)} style={{ ...STY.input, width: "auto" }}>
-              {employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-            </select>
-            <Btn onClick={openShift} disabled={!who}>Открыть смену</Btn>
-          </div>
-        )}
-      </div>
-
-      {shift && (
-        <div className="grid gap-4 mt-5" style={{ gridTemplateColumns: "minmax(0, 3fr) minmax(0, 2fr)" }}>
-          <div style={{ background: "rgba(255,255,255,.06)", borderRadius: 16, padding: 16 }}>
-            <div style={{ fontSize: 13, color: PAL.mintPale, marginBottom: 8 }}>Кальян</div>
-            <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-              {KINDS.map(([k, l], i) => (
-                <button key={k} onClick={() => pickKind(k)} style={kindBtn(kind === k, [PAL.mint, PAL.sun, PAL.sky][i])}>
-                  {l}<div style={{ fontSize: 12, fontWeight: 600, color: PAL.mute, marginTop: 2 }}>{fmtMoney(prices[k])}</div>
-                </button>
-              ))}
-            </div>
-            <div style={{ fontSize: 13, color: PAL.mintPale, margin: "12px 0 8px" }}>Скидка</div>
-            <div className="flex flex-wrap gap-2">
-              {DISCOUNTS.map((d) => (
-                <button key={d} onClick={() => setDisc(d)} style={{ border: "none", borderRadius: 999, padding: "7px 14px", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit", background: disc === d ? PAL.lilac : "rgba(255,255,255,.1)", color: PAL.panelText }}>
-                  {d ? `−${d}%` : "без скидки"}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center justify-between mt-4 gap-3 flex-wrap">
-              <label className="flex items-center gap-2" style={{ fontSize: 13, color: PAL.mintPale }}>
-                Табака в чаше
-                <input type="number" min={0} value={grams} onChange={(e) => setGrams(e.target.value)} style={{ ...STY.input, width: 70, padding: "5px 8px", fontWeight: 800 }} /> г
-              </label>
-              <div>
-                <span style={{ fontSize: 13, color: PAL.mintPale }}>К оплате </span>
-                <span style={{ fontSize: 26, fontWeight: 800, color: PAL.mint }}>{fmtMoney(price)}</span>
-                {disc > 0 && <span style={{ fontSize: 13, color: PAL.mute, marginLeft: 8, textDecoration: "line-through" }}>{fmtMoney(prices[kind])}</span>}
-              </div>
-              <Btn onClick={sell}>Пробить кальян</Btn>
-            </div>
-          </div>
-
-          <div style={{ background: "rgba(255,255,255,.06)", borderRadius: 16, padding: 16, display: "flex", flexDirection: "column" }}>
-            <div className="flex justify-between items-baseline">
-              <div style={{ fontSize: 13, color: PAL.mintPale }}>За смену</div>
-              <div style={{ fontSize: 12, color: PAL.mute }}>{sales.length} шт · со скидкой {discounted} · <b style={{ color: PAL.mint }}>{gramsTotal} г</b> табака</div>
-            </div>
-            <div className="grid gap-2 mt-2" style={{ gridTemplateColumns: "repeat(3, 1fr)" }}>
-              {KINDS.map(([k, l], i) => (
-                <div key={k} style={{ borderRadius: 10, padding: "8px 10px", background: "rgba(255,255,255,.05)", borderLeft: `3px solid ${[PAL.mint, PAL.sun, PAL.sky][i]}` }}>
-                  <div style={{ fontSize: 22, fontWeight: 800 }}>{counts[k]}</div>
-                  <div style={{ fontSize: 12, color: PAL.mintPale }}>{l.toLowerCase()}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{ marginTop: 10, maxHeight: 150, overflowY: "auto", flex: 1 }}>
-              {sales.length === 0 && <div style={{ fontSize: 13, color: PAL.mute, padding: "10px 0" }}>Пока ни одного кальяна — выбери тип слева и пробей.</div>}
-              {sales.map((s) => (
-                <div key={s.id} className="flex items-center gap-2" style={{ fontSize: 13, padding: "5px 0", borderTop: "1px solid rgba(255,255,255,.08)" }}>
-                  <span style={{ color: PAL.mute, width: 44 }}>{fmtTime(s.ts)}</span>
-                  <span style={{ fontWeight: 700, flex: 1 }}>{KINDS.find((k) => k[0] === s.kind)[1]}{s.disc ? <span style={{ color: PAL.lilac }}> −{s.disc}%</span> : null}{s.grams ? <span style={{ color: PAL.mute, fontWeight: 500 }}> · {s.grams} г</span> : null}</span>
-                  <span style={{ fontWeight: 800 }}>{fmtMoney(s.price)}</span>
-                  <button onClick={() => undo(s.id)} title="отменить" style={{ border: "none", background: "transparent", color: PAL.coral, cursor: "pointer", fontWeight: 800, fontSize: 15 }}>×</button>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      <div className="flex flex-wrap items-center justify-between gap-3 mt-4" style={{ fontSize: 13, color: PAL.mintPale }}>
-        <div>
-          {last ? <>Прошлая смена: {employees.find((e) => e.id === last.empId)?.name || "—"}, {fmtTime(last.openedAt)}–{fmtTime(last.closedAt)}, {last.sales.length} кальянов, {last.sales.reduce((s, x) => s + (x.grams || 0), 0)} г табака, <b style={{ color: PAL.panelText }}>{fmtMoney(last.sales.reduce((s, x) => s + x.price, 0))}</b></> : "Закрытых смен пока нет"}
-        </div>
-        <div className="flex items-center gap-2">
-          {editPrices ? (
-            <>
-              {KINDS.map(([k, l]) => (
-                <label key={k} className="flex items-center gap-1">
-                  <span>{l}</span>
-                  <input type="number" step={50} value={prices[k]} onChange={(e) => setPrices({ ...prices, [k]: Number(e.target.value) })} style={{ ...STY.input, width: 80, padding: "4px 6px", fontSize: 13 }} />₽
-                  <input type="number" value={bowlGrams[k]} onChange={(e) => setBowlGrams({ ...bowlGrams, [k]: Number(e.target.value) })} style={{ ...STY.input, width: 56, padding: "4px 6px", fontSize: 13 }} />г
-                </label>
-              ))}
-              <Btn small onClick={() => setEditPrices(false)}>Готово</Btn>
-            </>
-          ) : (
-            <button onClick={() => setEditPrices(true)} style={{ border: "none", background: "transparent", color: PAL.mintPale, cursor: "pointer", fontFamily: "inherit", fontSize: 13, textDecoration: "underline" }}>Цены и граммовки</button>
-          )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-// ====================================================================
-function ShiftStats({ employees, closedShifts, shift }) {
-  const [range, setRange] = useState(14);
-  const nameOf = (id) => employees.find((e) => e.id === id)?.name || "—";
-  const all = shift ? [{ ...shift, open: true }, ...closedShifts] : closedShifts;
-
-  const days = useMemo(() => {
-    const out = [];
-    for (let d = range - 1; d >= 0; d--) {
-      const date = addDays(TODAY, -d); const key = iso(date);
-      const row = { key, date, label: fmtShort(date), wd: DAYS_RU[(date.getDay() + 6) % 7] };
-      ["day", "night"].forEach((k) => {
-        const s = all.find((x) => x.kind === k && iso(new Date(x.openedAt)) === key);
-        row[k] = s ? { who: nameOf(s.empId), n: s.sales.length, sum: s.sales.reduce((a, x) => a + x.price, 0), open: s.open } : null;
-      });
-      row.n = (row.day?.n || 0) + (row.night?.n || 0);
-      row.sum = (row.day?.sum || 0) + (row.night?.sum || 0);
-      out.push(row);
-    }
-    return out;
-  }, [all, range, employees]);
-
-  const chart = days.map((r) => ({ label: r.label, "1-я смена": r.day?.n || 0, "2-я смена": r.night?.n || 0, sum: r.sum }));
-  const tot = days.reduce((a, r) => ({ n: a.n + r.n, sum: a.sum + r.sum, d: a.d + (r.day?.n || 0), nt: a.nt + (r.night?.n || 0) }), { n: 0, sum: 0, d: 0, nt: 0 });
-  const worked = days.filter((r) => r.n).length || 1;
-
-  const th = { padding: "8px 8px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap" };
-  const td = { padding: "8px 8px", borderTop: `1px solid ${PAL.line}`, fontSize: 13, verticalAlign: "middle" };
-  const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
-  const cell = (s) => s ? (
-    <>
-      <td style={td}>{s.who}{s.open && <span style={{ color: PAL.mint, fontWeight: 700 }}> · идёт</span>}</td>
-      <td style={{ ...num, fontWeight: 700 }}>{s.n}</td>
-      <td style={{ ...num, color: PAL.mute }}>{fmtMoney(s.sum)}</td>
-    </>
-  ) : <><td style={{ ...td, color: PAL.mute }}>—</td><td style={num} /><td style={num} /></>;
-
-  return (
-    <Card style={{ gridColumn: "span 12" }} title="Кальяны по дням и сменам"
-      aside={<div className="flex gap-1">{[7, 14, 30].map((n) => <button key={n} onClick={() => setRange(n)} style={{ border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: range === n ? PAL.panel : PAL.paper, color: range === n ? PAL.panelText : PAL.mute }}>{n} дней</button>)}</div>}>
-      <div className="flex flex-wrap gap-2 mb-3">
-        <Pill color={PAL.mint}>{tot.n} кальянов · {fmtMoney(tot.sum)}</Pill>
-        <Pill color={PAL.sun}>1-я смена: {tot.d}</Pill>
-        <Pill color={PAL.ink}>2-я смена: {tot.nt}</Pill>
-        <Pill color={PAL.sky}>в среднем {Math.round(tot.n / worked)} в день</Pill>
-      </div>
+    <Card title={`Смены за ${MONTHS_RU[monday.getMonth()]} — 1-я и 2-я`} style={{ gridColumn: "span 12" }}>
       <ResponsiveContainer width="100%" height={220}>
-        <BarChart data={chart} margin={{ left: -10, right: 10, top: 16 }}>
+        <BarChart data={monthStats} margin={{ left: -10, right: 10, top: 16 }}>
           <CartesianGrid vertical={false} stroke={PAL.line} />
-          <XAxis dataKey="label" tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} interval={range > 14 ? 2 : 0} />
+          <XAxis dataKey="name" tick={{ fontSize: 13, fill: PAL.ink, fontWeight: 600 }} axisLine={false} tickLine={false} />
           <YAxis allowDecimals={false} tick={{ fontSize: 11, fill: PAL.mute }} axisLine={false} tickLine={false} />
-          <Tooltip contentStyle={STY.tip} formatter={(v, n, p) => [v, n]} labelFormatter={(l, p) => `${l} · ${fmtMoney(p?.[0]?.payload?.sum || 0)}`} />
-          <Bar dataKey="1-я смена" stackId="a" fill={PAL.sun} isAnimationActive={false} />
-          <Bar dataKey="2-я смена" stackId="a" fill={PAL.ink} radius={[6, 6, 0, 0]} isAnimationActive={false}>
-            <LabelList dataKey={(d) => d["1-я смена"] + d["2-я смена"] || ""} position="top" style={{ fontSize: 11, fill: PAL.ink, fontWeight: 700 }} />
-          </Bar>
+          <Tooltip contentStyle={STY.tip} />
+          <Bar dataKey="день" stackId="a" fill={PAL.sun} isAnimationActive={false} />
+          <Bar dataKey="ночь" stackId="a" fill={PAL.ink} radius={[8, 8, 0, 0]} isAnimationActive={false} />
         </BarChart>
       </ResponsiveContainer>
-      <div style={{ overflowX: "auto", maxHeight: 420, overflowY: "auto", marginTop: 8 }}>
-        <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
-          <thead><tr>
-            <th style={th}>День</th>
-            <th style={{ ...th, borderLeft: `2px solid ${PAL.sun}` }}>1-я смена</th><th style={{ ...th, textAlign: "right" }}>шт</th><th style={{ ...th, textAlign: "right" }}>касса</th>
-            <th style={{ ...th, borderLeft: `2px solid ${PAL.ink}` }}>2-я смена</th><th style={{ ...th, textAlign: "right" }}>шт</th><th style={{ ...th, textAlign: "right" }}>касса</th>
-            <th style={{ ...th, textAlign: "right" }}>Итого шт</th><th style={{ ...th, textAlign: "right" }}>Итого касса</th>
-          </tr></thead>
-          <tbody>
-            {[...days].reverse().map((r) => (
-              <tr key={r.key} style={{ background: r.key === iso(TODAY) ? PAL.mintPale : "transparent" }}>
-                <td style={{ ...td, fontWeight: 700, whiteSpace: "nowrap" }}>{r.wd}, {r.label}</td>
-                {cell(r.day)}{cell(r.night)}
-                <td style={{ ...num, fontWeight: 800 }}>{r.n || "—"}</td>
-                <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep }}>{r.sum ? fmtMoney(r.sum) : "—"}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <div className="flex gap-2 mt-2"><Pill color={PAL.sun}>1-я смена</Pill><Pill color={PAL.ink}>2-я смена</Pill></div>
     </Card>
   );
 }
@@ -695,49 +620,131 @@ const TYPES = {
   sale: { label: "Продажа", color: "#3A8DFF" },
   writeoff: { label: "Списание", color: "#F2634A" },
   adjust: { label: "Корректировка", color: "#8E6CF2" },
+  inventory: { label: "Инвентаризация", color: "#F5B841" },
 };
-const BOWLS = [["regular", "Обычный", 22], ["fruit", "Фрукты", 30]];
+// граммовки кальянов
+const BOWLS = [
+  ["classic", "Классика", 22],
+  ["pro1", "Хука Про 1", 11],
+  ["pro2", "Хука Про 2", 22],
+  ["fruit", "Фрукты", 30],
+];
+const bowlG = (k) => (BOWLS.find((b) => b[0] === k) || [, , 22])[2];
+const bowlName = (k) => (BOWLS.find((b) => b[0] === k) || [, "кальян"])[1];
+const INV_KIND = { mid: "Промежуточная", main: "Основная" };
+const DEVIATION = 800; // допустимое отклонение, г
 
-function TobaccoView({ setToast, ledger, setLedger }) {
-  const [supply, setSupply] = useState({ grams: "", note: "" });
-  const [sale, setSale] = useState({ kind: "regular", qty: 1 });
-  const [wo, setWo] = useState({ kind: "regular", qty: 1, note: "" });
+function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInventories }) {
   const [range, setRange] = useState(14);
-  const [editStock, setEditStock] = useState(null);
-  const [clearAsk, setClearAsk] = useState(false);
+  const [gramsPerBowl, setGramsPerBowl] = useState(22);
   const fileRef = useRef();
   const [busy, setBusy] = useState(false);
   const [found, setFound] = useState(null);
-  const [fileMode, setFileMode] = useState("add"); // add | replace
+  const [fileMode, setFileMode] = useState("add");
+  const [fileErr, setFileErr] = useState("");
+  const [confirmFile, setConfirmFile] = useState(false);
 
-  const stock = ledger.reduce((s, l) => s + l.grams, 0);
+  const stock = ledger.reduce((s, l) => s + (Number(l.grams) || 0), 0);
   const add = (entry) => setLedger((L) => [...L, { id: "l" + Date.now() + Math.random().toString(16).slice(2, 5), date: iso(TODAY), ts: Date.now(), ...entry }]);
+  const addMany = (entries) => setLedger((L) => [...L, ...entries.map((e, i) => ({ id: "l" + Date.now() + i + Math.random().toString(16).slice(2, 4), date: iso(TODAY), ts: Date.now() + i, ...e }))]);
   const remove = (id) => setLedger((L) => L.filter((l) => l.id !== id));
-  const bowlG = (k) => BOWLS.find((b) => b[0] === k)[2];
+  const patch = (id, fields) => setLedger((L) => L.map((l) => (l.id === id ? { ...l, ...fields } : l)));
 
-  const doSupply = () => { const g = Number(supply.grams); if (!(g > 0)) return; add({ type: "supply", grams: g, note: supply.note || "поставка" }); setSupply({ grams: "", note: "" }); setToast(`+${g} г на склад`); };
-  const doSale = () => { const q = Number(sale.qty); if (!(q > 0)) return; const g = q * bowlG(sale.kind); add({ type: "sale", kind: sale.kind, qty: q, grams: -g, note: BOWLS.find((b) => b[0] === sale.kind)[1].toLowerCase() }); setSale({ ...sale, qty: 1 }); setToast(`Продано ${q} шт, −${g} г`); };
-  const doWo = () => { const q = Number(wo.qty); if (!(q > 0)) return; const g = q * bowlG(wo.kind); add({ type: "writeoff", kind: wo.kind, qty: q, grams: -g, note: wo.note || "списание" }); setWo({ ...wo, qty: 1, note: "" }); setToast(`Списано ${q} шт, −${g} г`); };
-  const commitStock = () => { const diff = Math.max(0, Number(editStock) || 0) - stock; if (diff) { add({ type: "adjust", grams: diff, note: "ручная правка остатка" }); setToast(`Остаток: ${diff > 0 ? "+" : ""}${diff} г`); } setEditStock(null); };
-  const clearStock = () => { if (stock) add({ type: "adjust", grams: -stock, note: "очистка склада" }); setClearAsk(false); setToast("Склад обнулён"); };
-
-  // график: остаток по дням
+  // ---------- расчётный остаток: график и прогноз ----------
   const chart = useMemo(() => {
     const out = []; const start = iso(addDays(TODAY, -(range - 1)));
     let bal = ledger.filter((l) => l.date < start).reduce((s, l) => s + l.grams, 0);
     for (let d = range - 1; d >= 0; d--) {
       const key = iso(addDays(TODAY, -d)); const ls = ledger.filter((l) => l.date === key);
       bal += ls.reduce((s, l) => s + l.grams, 0);
-      out.push({ label: fmtShort(addDays(TODAY, -d)), остаток: bal, продано: -ls.filter((l) => l.type === "sale").reduce((s, l) => s + l.grams, 0) });
+      out.push({ label: fmtShort(addDays(TODAY, -d)), остаток: bal, ушло: -ls.filter((l) => l.grams < 0).reduce((s, l) => s + l.grams, 0) });
     }
     return out;
   }, [ledger, range]);
-  const soldRange = chart.reduce((s, r) => s + r.продано, 0);
-  const daysLeft = soldRange ? Math.round(stock / (soldRange / range)) : null;
-  const todaySold = ledger.filter((l) => l.type === "sale" && l.date === iso(TODAY)).reduce((s, l) => s + (l.qty || 0), 0);
 
-  // распознавание файла: модель выписывает каждую строку, сумму считаем сами
-  const [fileErr, setFileErr] = useState("");
+  // среднее число кальянов в день — из смен
+  const avgHookahs = useMemo(() => {
+    const rows = Object.entries(daily || {}).map(([k, v]) => ({ day: k.split("|")[0], hk: Number(v?.hookahs) || 0 })).filter((r) => r.hk);
+    const from = iso(addDays(TODAY, -29));
+    const recent = rows.filter((r) => r.day >= from);
+    const byDay = {};
+    recent.forEach((r) => { byDay[r.day] = (byDay[r.day] || 0) + r.hk; });
+    const ds = Object.values(byDay);
+    return ds.length ? ds.reduce((a, x) => a + x, 0) / ds.length : 0;
+  }, [daily]);
+
+  const perDay = Math.round(avgHookahs * gramsPerBowl);
+  const daysLeft = perDay > 0 ? Math.floor(stock / perDay) : null;
+  const goneRange = chart.reduce((s, r) => s + r.ушло, 0);
+
+  // ---------- инвентаризация ----------
+  const invList = [...(inventories || [])].sort((a, b) => (a.date < b.date ? 1 : -1));
+  const lastInv = invList[0] || null;
+  const nextInvDate = lastInv ? addDays(new Date(lastInv.date + "T12:00:00"), 30) : null;
+  const daysToInv = nextInvDate ? Math.round((nextInvDate - TODAY) / 864e5) : null;
+
+  const [invKind, setInvKind] = useState("mid");
+  const [invActual, setInvActual] = useState("");
+  const [invChecked, setInvChecked] = useState(false);
+  const [showInvList, setShowInvList] = useState(false);
+  const invNum = Number(invActual);
+  const invDiff = invActual === "" ? null : Math.round(invNum - stock);
+  const invBig = invDiff !== null && Math.abs(invDiff) > DEVIATION;
+
+  const saveInventory = () => {
+    if (invActual === "" || !(invNum >= 0)) return;
+    const rec = { id: "i" + Date.now(), date: iso(TODAY), kind: invKind, actual: Math.round(invNum), calc: stock, diff: invDiff };
+    setInventories((L) => [...(L || []), rec]);
+    if (invDiff) add({ type: "inventory", grams: invDiff, note: `${INV_KIND[invKind].toLowerCase()} инвентаризация (расчёт ${stock} г)` });
+    setInvActual(""); setInvChecked(false);
+    setToast(`Инвентаризация сохранена: ${Math.round(invNum)} г`);
+  };
+
+  // ---------- ручная корректировка ----------
+  const [corr, setCorr] = useState({ dir: 1, grams: "", note: "" });
+  const doCorr = () => {
+    const g = Number(corr.grams); if (!(g > 0)) return;
+    add({ type: "adjust", grams: corr.dir * g, note: corr.note || (corr.dir > 0 ? "ручное добавление" : "ручное уменьшение") });
+    setToast(`${corr.dir > 0 ? "+" : "−"}${g} г`); setCorr({ dir: 1, grams: "", note: "" });
+  };
+
+  // ---------- продажи и списания за период ----------
+  const today = iso(TODAY);
+  const [salePeriod, setSalePeriod] = useState({ from: today, to: today });
+  const [saleQty, setSaleQty] = useState({});
+  const [woPeriod, setWoPeriod] = useState({ from: today, to: today });
+  const [woQty, setWoQty] = useState({});
+  const [woReason, setWoReason] = useState("перезабивка");
+  const [woOwn, setWoOwn] = useState("");
+
+  const qtySum = (q) => BOWLS.reduce((s, [k, , g]) => s + (Number(q[k]) || 0) * g, 0);
+  const qtyCount = (q) => BOWLS.reduce((s, [k]) => s + (Number(q[k]) || 0), 0);
+  const saleGrams = qtySum(saleQty), woGrams = qtySum(woQty);
+
+  const periodNote = (p) => (p.from === p.to ? fmtShort(new Date(p.from + "T12:00:00")) : `${fmtShort(new Date(p.from + "T12:00:00"))} — ${fmtShort(new Date(p.to + "T12:00:00"))}`);
+
+  const doSales = () => {
+    const entries = BOWLS.filter(([k]) => Number(saleQty[k]) > 0).map(([k, label, g]) => ({
+      type: "sale", kind: k, qty: Number(saleQty[k]), grams: -Number(saleQty[k]) * g,
+      date: salePeriod.to, note: `${label} · ${periodNote(salePeriod)}`,
+    }));
+    if (!entries.length) return;
+    addMany(entries); setSaleQty({}); setToast(`Продажи: ${qtyCount(saleQty)} шт, −${saleGrams} г`);
+  };
+  const doWo = () => {
+    const reason = woReason === "своя" ? (woOwn.trim() || "списание") : woReason;
+    const entries = BOWLS.filter(([k]) => Number(woQty[k]) > 0).map(([k, label, g]) => ({
+      type: "writeoff", kind: k, qty: Number(woQty[k]), grams: -Number(woQty[k]) * g,
+      date: woPeriod.to, note: `${label} · ${reason} · ${periodNote(woPeriod)}`,
+    }));
+    if (!entries.length) return;
+    addMany(entries); setWoQty({}); setWoOwn(""); setToast(`Списано ${qtyCount(woQty)} шт, −${woGrams} г`);
+  };
+  // период списания по умолчанию повторяет продажи, пока его не тронули
+  const [woTouched, setWoTouched] = useState(false);
+  useEffect(() => { if (!woTouched) setWoPeriod(salePeriod); }, [salePeriod, woTouched]);
+
+  // ---------- файл ----------
   const readB64 = (file) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result.split(",")[1]); r.onerror = rej; r.readAsDataURL(file); });
   const toJpeg = (file) => new Promise((res, rej) => {
     const url = URL.createObjectURL(file); const img = new Image();
@@ -746,148 +753,276 @@ function TobaccoView({ setToast, ledger, setLedger }) {
     img.src = url;
   });
   const onFile = async (e) => {
-    const file = e.target.files?.[0]; if (!file) return; setBusy(true); setFound(null); setFileErr("");
+    const file = e.target.files?.[0]; if (!file) return; setBusy(true); setFound(null); setFileErr(""); setConfirmFile(false);
     try {
       const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
       const data = isPdf ? await readB64(file) : await toJpeg(file);
-      const mediaType = isPdf ? "application/pdf" : "image/jpeg";
-      const m = await api("POST", "/api/recognize", { base64: data, mediaType });
-      const items = m.items;
-      setFound({ items, docTotal: m.document_total ? Number(m.document_total) : null, name: file.name, open: false });
+      const m = await api("POST", "/api/recognize", { base64: data, mediaType: isPdf ? "application/pdf" : "image/jpeg" });
+      setFound({ items: m.items, docTotal: m.docTotal ?? null, name: file.name, open: false });
     } catch (ex) { setFileErr("Не удалось распознать: " + (ex.message || ex)); }
     setBusy(false); e.target.value = "";
   };
   const foundTotal = found ? found.items.reduce((s, it) => s + (Number(it.grams) || 0), 0) : 0;
   const setFoundItem = (id, grams) => setFound((f) => ({ ...f, items: f.items.map((it) => (it.id === id ? { ...it, grams: Number(grams) || 0 } : it)) }));
   const dropFoundItem = (id) => setFound((f) => ({ ...f, items: f.items.filter((it) => it.id !== id) }));
+  const applyFile = () => {
+    if (fileMode === "add") { add({ type: "supply", grams: foundTotal, note: `накладная ${found.name}` }); setToast(`+${foundTotal} г на склад`); }
+    else { const diff = foundTotal - stock; if (diff) add({ type: "inventory", grams: diff, note: `инвентаризация по файлу ${found.name}` }); setToast(`Остаток: ${foundTotal} г`); }
+    setFound(null); setConfirmFile(false);
+  };
 
-  const th = { padding: "8px 8px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap" };
+  // ---------- редактирование строк журнала ----------
+  const [editRow, setEditRow] = useState(null);
+  const [editVals, setEditVals] = useState({ grams: 0, note: "" });
+  const startEdit = (l) => { setEditRow(l.id); setEditVals({ grams: l.grams, note: l.note || "" }); };
+  const saveEdit = () => { patch(editRow, { grams: Math.round(Number(editVals.grams) || 0), note: editVals.note }); setEditRow(null); setToast("Строка изменена"); };
+
+  const th = { padding: "8px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap" };
   const td = { padding: "9px 8px", borderTop: `1px solid ${PAL.line}`, fontSize: 14, verticalAlign: "middle" };
   const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
-  const kindBtn = (active, color) => ({ border: `2px solid ${active ? color : PAL.line}`, background: active ? color + "22" : PAL.white, color: PAL.ink, borderRadius: 12, padding: "12px 10px", fontWeight: 800, fontSize: 15, cursor: "pointer", fontFamily: "inherit", textAlign: "center", flex: 1 });
-  const KindPick = ({ value, onChange }) => (
-    <div className="flex gap-2">
-      {BOWLS.map(([k, l, g], i) => <button key={k} onClick={() => onChange(k)} style={kindBtn(value === k, [PAL.sky, PAL.sun][i])}>{l}<div style={{ fontSize: 12, fontWeight: 600, color: PAL.mute, marginTop: 2 }}>{g} г</div></button>)}
-    </div>
-  );
-  const QtyRow = ({ value, onChange, kind, onEnter }) => (
-    <div className="flex items-center gap-2 mt-3">
-      <input type="number" min={1} value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onEnter()} style={{ ...STY.input, width: 90, fontSize: 20, fontWeight: 800, textAlign: "center" }} />
-      <span style={{ fontSize: 14, color: PAL.mute }}>шт × {bowlG(kind)} г = <b style={{ color: PAL.ink }}>{(Number(value) || 0) * bowlG(kind)} г</b></span>
+  const label = { fontSize: 11, color: PAL.mute, marginBottom: 3 };
+
+  const QtyTable = ({ q, onChange, color }) => (
+    <div className="flex flex-col gap-2" style={{ marginTop: 10 }}>
+      {BOWLS.map(([k, name, g]) => (
+        <div key={k} className="flex items-center gap-2">
+          <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{name}<span style={{ fontWeight: 600, fontSize: 12, color: PAL.mute }}> · {g} г</span></div>
+          <input type="number" min={0} value={q[k] ?? ""} placeholder="0" onChange={(e) => onChange({ ...q, [k]: e.target.value })}
+            style={{ ...STY.input, width: 80, textAlign: "center", fontWeight: 800 }} />
+          <div style={{ width: 76, textAlign: "right", fontSize: 13, color: (Number(q[k]) || 0) ? color : PAL.mute, fontWeight: 700 }}>
+            {(Number(q[k]) || 0) * g || 0} г
+          </div>
+        </div>
+      ))}
     </div>
   );
 
   return (
     <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
-      {/* шапка: остаток + график */}
-      <section style={{ gridColumn: "1 / -1", background: PAL.panel, color: PAL.panelText, borderRadius: 22, padding: "22px 24px" }}>
-        <div className="grid gap-5" style={{ gridTemplateColumns: "minmax(0, 2fr) minmax(0, 3fr)" }}>
+      {/* ---------- расчётный остаток ---------- */}
+      <section style={{ gridColumn: "span 7", background: PAL.panel, color: PAL.panelText, borderRadius: 22, padding: "20px 22px" }}>
+        <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
-            <div style={{ fontSize: 13, color: PAL.mintPale, opacity: .85 }}>Табака на складе</div>
-            {editStock === null ? (
-              <div style={{ fontSize: 56, fontWeight: 800, letterSpacing: -2, lineHeight: 1.05, color: PAL.mint, cursor: "text" }} title="Нажми, чтобы поправить" onClick={() => setEditStock(stock)}>
-                {stock.toLocaleString("ru-RU")} <span style={{ fontSize: 22, color: PAL.mintPale, letterSpacing: 0 }}>г</span>
-              </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <input autoFocus type="number" value={editStock} onChange={(e) => setEditStock(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") commitStock(); if (e.key === "Escape") setEditStock(null); }} style={{ ...STY.input, width: 160, fontSize: 28, fontWeight: 800 }} />
-                <Btn onClick={commitStock}>Сохранить</Btn><Btn tone="ghost" onClick={() => setEditStock(null)}>Отмена</Btn>
-              </div>
-            )}
-            <div className="flex flex-wrap gap-2 mt-3">
-              <Pill light color={PAL.sky}>сегодня продано {todaySold} шт</Pill>
-              <Pill light color={PAL.mint}>за {range} дн. ушло {soldRange} г</Pill>
-              {daysLeft !== null && <Pill light color={daysLeft < 5 ? PAL.coral : PAL.lilac}>хватит примерно на {daysLeft} дн.</Pill>}
-            </div>
-            <div className="flex flex-wrap gap-2 mt-4 items-center">
-              {clearAsk
-                ? <><span style={{ fontSize: 13, color: PAL.coral, fontWeight: 700 }}>Обнулить склад?</span><Btn small tone="coral" onClick={clearStock}>Да, обнулить</Btn><Btn small tone="ghost" onClick={() => setClearAsk(false)}>Нет</Btn></>
-                : <button onClick={() => setClearAsk(true)} style={{ border: "none", background: "transparent", color: PAL.mintPale, cursor: "pointer", fontFamily: "inherit", fontSize: 13, textDecoration: "underline", padding: 0 }}>Очистить склад</button>}
+            <div style={{ fontSize: 13, color: PAL.mintPale, opacity: .85 }}>Расчётный остаток на складе</div>
+            <div style={{ fontSize: 48, fontWeight: 800, letterSpacing: -2, lineHeight: 1.1, color: PAL.mint }}>
+              {stock.toLocaleString("ru-RU")} <span style={{ fontSize: 20, color: PAL.mintPale, letterSpacing: 0 }}>г</span>
             </div>
           </div>
-          <div>
-            <div className="flex justify-end gap-1 mb-1">
-              {[7, 14, 30].map((n) => <button key={n} onClick={() => setRange(n)} style={{ border: "none", borderRadius: 8, padding: "4px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: range === n ? PAL.mint : "rgba(255,255,255,.1)", color: range === n ? PAL.panel : PAL.mintPale }}>{n} дней</button>)}
-            </div>
-            <ResponsiveContainer width="100%" height={190}>
-              <AreaChart data={chart} margin={{ left: -6, right: 6, top: 6 }}>
-                <defs><linearGradient id="gstock" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={PAL.mint} stopOpacity={.6} /><stop offset="100%" stopColor={PAL.mint} stopOpacity={0} /></linearGradient></defs>
-                <CartesianGrid vertical={false} stroke="rgba(255,255,255,.08)" />
-                <XAxis dataKey="label" tick={{ fontSize: 11, fill: PAL.mintPale }} axisLine={false} tickLine={false} interval={range > 14 ? 3 : 1} />
-                <YAxis tick={{ fontSize: 11, fill: PAL.mintPale }} axisLine={false} tickLine={false} />
-                <Tooltip contentStyle={{ ...STY.tip, background: PAL.white, color: PAL.ink }} formatter={(v) => `${v} г`} />
-                <Area type="monotone" dataKey="остаток" stroke={PAL.mint} strokeWidth={2.5} fill="url(#gstock)" isAnimationActive={false} />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div className="flex gap-1">
+            {[7, 14, 30].map((n) => (
+              <button key={n} onClick={() => setRange(n)} style={{ border: "none", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: range === n ? PAL.mint : "rgba(255,255,255,.12)", color: range === n ? PAL.ink : PAL.panelText }}>{n} дн.</button>
+            ))}
           </div>
+        </div>
+
+        <div style={{ height: 150, marginTop: 10 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <AreaChart data={chart} margin={{ left: -20, right: 6, top: 6 }}>
+              <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={PAL.mint} stopOpacity={.55} /><stop offset="100%" stopColor={PAL.mint} stopOpacity={0} /></linearGradient></defs>
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: PAL.mintPale }} axisLine={false} tickLine={false} interval={range > 14 ? 3 : 1} />
+              <YAxis tick={{ fontSize: 10, fill: PAL.mintPale }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={STY.tip} formatter={(v, n) => [`${v} г`, n]} />
+              <Area type="monotone" dataKey="остаток" stroke={PAL.mint} strokeWidth={2.5} fill="url(#g1)" isAnimationActive={false} />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+
+        <div className="flex flex-wrap gap-2" style={{ marginTop: 6 }}>
+          <Pill color={PAL.mint} light>за {range} дн. ушло {goneRange} г</Pill>
+          <Pill color={PAL.sky} light>в среднем {avgHookahs ? avgHookahs.toFixed(1) : "—"} кальянов в день</Pill>
+          <Pill color={PAL.sun} light>расход ≈ {perDay || "—"} г/день</Pill>
+        </div>
+
+        <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 14, background: "rgba(255,255,255,.08)" }}>
+          <div className="flex items-center gap-2 flex-wrap" style={{ fontSize: 13 }}>
+            <span style={{ color: PAL.mintPale }}>Средняя граммовка кальяна</span>
+            <input type="number" value={gramsPerBowl} onChange={(e) => setGramsPerBowl(Number(e.target.value) || 0)}
+              style={{ width: 70, borderRadius: 8, border: "none", padding: "4px 8px", fontFamily: "inherit", fontWeight: 800, textAlign: "center" }} />
+            <span style={{ color: PAL.mintPale }}>г</span>
+          </div>
+          <div style={{ marginTop: 8, fontSize: 15, fontWeight: 700 }}>
+            {daysLeft === null
+              ? <span style={{ color: PAL.mintPale }}>Заполни кальяны в сменах — посчитаю, на сколько хватит.</span>
+              : <>Рекомендация: хватит примерно на <span style={{ color: daysLeft < 7 ? PAL.coral : PAL.mint, fontSize: 22 }}>{daysLeft}</span> дн.
+                {daysLeft < 7 && <span style={{ color: PAL.coral }}> — пора заказывать</span>}</>}
+          </div>
+          <div style={{ fontSize: 11, color: PAL.mintPale, opacity: .8, marginTop: 4 }}>Это прогноз по среднему расходу, из остатка ничего не вычитается.</div>
         </div>
       </section>
 
-      {/* поставка */}
-      <Card title="Добавить табак" aside="вручную, в граммах" style={{ gridColumn: "span 4" }}>
-        <div className="flex items-center gap-2">
-          <input type="number" min={1} placeholder="0" value={supply.grams} onChange={(e) => setSupply({ ...supply, grams: e.target.value })} onKeyDown={(e) => e.key === "Enter" && doSupply()} style={{ ...STY.input, fontSize: 24, fontWeight: 800 }} />
-          <span style={{ fontSize: 16, color: PAL.mute }}>г</span>
+      {/* ---------- реальная инвентаризация ---------- */}
+      <Card style={{ gridColumn: "span 5" }} title="Реальная инвентаризация"
+        aside={<Btn small tone="ghost" onClick={() => setShowInvList((v) => !v)}>{showInvList ? "Скрыть" : "Прошлые"}</Btn>}>
+        <div className="flex flex-wrap gap-2 mb-3">
+          {lastInv ? (
+            <>
+              <Pill color={PAL.sun}>последняя {fmtShort(new Date(lastInv.date + "T12:00:00"))} · {lastInv.actual} г</Pill>
+              <Pill color={daysToInv <= 3 ? PAL.coral : PAL.sky}>
+                {daysToInv > 0 ? `следующая через ${daysToInv} дн.` : `просрочена на ${-daysToInv} дн.`}
+              </Pill>
+            </>
+          ) : <Pill color={PAL.coral}>инвентаризаций ещё не было</Pill>}
         </div>
-        <div className="flex gap-2 mt-2 flex-wrap">
-          {[250, 500, 1000].map((g) => <Btn key={g} small tone="ghost" onClick={() => setSupply({ ...supply, grams: String((Number(supply.grams) || 0) + g) })}>+{g}</Btn>)}
-        </div>
-        <input placeholder="Поставщик или комментарий" value={supply.note} onChange={(e) => setSupply({ ...supply, note: e.target.value })} style={{ ...STY.input, marginTop: 10 }} />
-        <div className="mt-3"><Btn onClick={doSupply} disabled={!(Number(supply.grams) > 0)}>Добавить на склад</Btn></div>
+
+        {showInvList ? (
+          <div style={{ maxHeight: 260, overflowY: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead><tr><th style={th}>Дата</th><th style={th}>Тип</th><th style={{ ...th, textAlign: "right" }}>Факт</th><th style={{ ...th, textAlign: "right" }}>Расчёт</th><th style={{ ...th, textAlign: "right" }}>Δ</th></tr></thead>
+              <tbody>
+                {invList.length === 0 && <tr><td colSpan={5} style={{ ...td, color: PAL.mute }}>Пока пусто</td></tr>}
+                {invList.map((i) => (
+                  <tr key={i.id}>
+                    <td style={td}>{fmtShort(new Date(i.date + "T12:00:00"))}</td>
+                    <td style={{ ...td, color: PAL.mute }}>{INV_KIND[i.kind]}</td>
+                    <td style={{ ...num, fontWeight: 700 }}>{i.actual}</td>
+                    <td style={{ ...num, color: PAL.mute }}>{i.calc}</td>
+                    <td style={{ ...num, fontWeight: 700, color: Math.abs(i.diff) > DEVIATION ? PAL.coral : PAL.mintDeep }}>{i.diff > 0 ? "+" : ""}{i.diff}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <>
+            <div className="flex gap-2 mb-3">
+              {Object.entries(INV_KIND).map(([k, l]) => (
+                <button key={k} onClick={() => setInvKind(k)}
+                  style={{ flex: 1, border: `2px solid ${invKind === k ? PAL.mint : PAL.line}`, background: invKind === k ? PAL.mintPale : PAL.white, color: PAL.ink, borderRadius: 12, padding: "10px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>{l}</button>
+              ))}
+            </div>
+            <div style={label}>Фактический остаток, г</div>
+            <div className="flex gap-2">
+              <input type="number" value={invActual} placeholder={String(stock)} onChange={(e) => { setInvActual(e.target.value); setInvChecked(true); }}
+                style={{ ...STY.input, fontSize: 22, fontWeight: 800 }} />
+            </div>
+
+            {invDiff !== null && invChecked && (
+              <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: invBig ? PAL.lowBg : PAL.mintPale }}>
+                <div style={{ fontWeight: 800, color: invBig ? PAL.coral : PAL.mintDeep }}>
+                  {invBig ? "Необходимо пересчитать" : "Нормальное отклонение"}
+                </div>
+                <div style={{ fontSize: 13, color: PAL.mute, marginTop: 2 }}>
+                  расчётный {stock} г · факт {Math.round(invNum)} г · разница {invDiff > 0 ? "+" : ""}{invDiff} г
+                  {invBig && ` (допустимо ±${DEVIATION} г)`}
+                </div>
+                {invBig && <div style={{ marginTop: 8 }}><Btn small tone="coral" onClick={() => { setInvActual(""); setInvChecked(false); }}>Пересчитать</Btn></div>}
+              </div>
+            )}
+
+            <div className="flex gap-2" style={{ marginTop: 12 }}>
+              <Btn onClick={saveInventory} disabled={invActual === ""}>Сохранить инвентаризацию</Btn>
+            </div>
+          </>
+        )}
       </Card>
 
-      {/* продажа */}
-      <Card title="Продажа кальянов" style={{ gridColumn: "span 4" }}>
-        <KindPick value={sale.kind} onChange={(k) => setSale({ ...sale, kind: k })} />
-        <QtyRow value={sale.qty} onChange={(v) => setSale({ ...sale, qty: v })} kind={sale.kind} onEnter={doSale} />
-        <div className="flex gap-2 mt-2">
-          {[1, 2, 5].map((n) => <Btn key={n} small tone="ghost" onClick={() => setSale({ ...sale, qty: String((Number(sale.qty) || 0) + n) })}>+{n}</Btn>)}
+      {/* ---------- ручная корректировка ---------- */}
+      <Card style={{ gridColumn: "span 4" }} title="Ручная корректировка">
+        <div className="flex gap-2 mb-3">
+          {[[1, "Добавить", PAL.mint], [-1, "Убрать", PAL.coral]].map(([dir, l, c]) => (
+            <button key={dir} onClick={() => setCorr({ ...corr, dir })}
+              style={{ flex: 1, border: `2px solid ${corr.dir === dir ? c : PAL.line}`, background: corr.dir === dir ? c + "22" : PAL.white, color: PAL.ink, borderRadius: 12, padding: "10px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>{l}</button>
+          ))}
         </div>
-        <div className="mt-3"><Btn onClick={doSale} disabled={!(Number(sale.qty) > 0)}>Продано — списать {(Number(sale.qty) || 0) * bowlG(sale.kind)} г</Btn></div>
+        <div style={label}>Граммы</div>
+        <input type="number" min={0} value={corr.grams} placeholder="0" onChange={(e) => setCorr({ ...corr, grams: e.target.value })}
+          style={{ ...STY.input, fontSize: 20, fontWeight: 800 }} />
+        <div style={{ ...label, marginTop: 10 }}>Комментарий — почему</div>
+        <input value={corr.note} placeholder="например: просыпали при забивке" onChange={(e) => setCorr({ ...corr, note: e.target.value })} style={STY.input} />
+        <div style={{ marginTop: 12 }}>
+          <Btn onClick={doCorr} disabled={!(Number(corr.grams) > 0)}>
+            Сохранить {corr.grams ? `(${corr.dir > 0 ? "+" : "−"}${corr.grams} г)` : ""}
+          </Btn>
+        </div>
       </Card>
 
-      {/* списание */}
-      <Card title="Списание" style={{ gridColumn: "span 4" }}>
-        <KindPick value={wo.kind} onChange={(k) => setWo({ ...wo, kind: k })} />
-        <QtyRow value={wo.qty} onChange={(v) => setWo({ ...wo, qty: v })} kind={wo.kind} onEnter={doWo} />
-        <select value={wo.note} onChange={(e) => setWo({ ...wo, note: e.target.value })} style={{ ...STY.input, marginTop: 10 }}>
-          <option value="">Причина…</option>
-          {["перезабивка", "пересох", "брак", "дегустация", "проба для гостя", "другое"].map((r) => <option key={r}>{r}</option>)}
-        </select>
-        <div className="mt-3"><Btn tone="coral" onClick={doWo} disabled={!(Number(wo.qty) > 0)}>Списать {(Number(wo.qty) || 0) * bowlG(wo.kind)} г</Btn></div>
+      {/* ---------- продажи ---------- */}
+      <Card style={{ gridColumn: "span 4" }} title="Продажи кальянов">
+        <div className="flex gap-2">
+          <label style={{ flex: 1 }}><div style={label}>с</div>
+            <input type="date" value={salePeriod.from} onChange={(e) => setSalePeriod({ ...salePeriod, from: e.target.value })} style={STY.input} /></label>
+          <label style={{ flex: 1 }}><div style={label}>по</div>
+            <input type="date" value={salePeriod.to} onChange={(e) => setSalePeriod({ ...salePeriod, to: e.target.value })} style={STY.input} /></label>
+        </div>
+        <QtyTable q={saleQty} onChange={setSaleQty} color={PAL.sky} />
+        <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
+          <Btn onClick={doSales} disabled={!saleGrams}>Сохранить</Btn>
+          <span style={{ fontSize: 14, color: PAL.mute }}>{qtyCount(saleQty)} шт · <b style={{ color: PAL.coral }}>−{saleGrams} г</b></span>
+        </div>
       </Card>
 
-      {/* из файла */}
-      <Card title="Из файла" aside="фото накладной, инвентаризационный лист или PDF" style={{ gridColumn: "span 12" }}>
-        <div className="flex items-center gap-3 flex-wrap">
-          <div style={{ display: "flex", background: PAL.paper, border: `1px solid ${PAL.line}`, borderRadius: 10, padding: 3, gap: 3 }}>
-            {[["add", "Поставка — добавить к остатку"], ["replace", "Инвентаризация — заменить остаток"]].map(([k, l]) => (
-              <button key={k} onClick={() => setFileMode(k)} style={{ border: "none", borderRadius: 8, padding: "6px 12px", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit", background: fileMode === k ? PAL.white : "transparent", color: fileMode === k ? PAL.ink : PAL.mute }}>{l}</button>
+      {/* ---------- списание ---------- */}
+      <Card style={{ gridColumn: "span 4" }} title="Списание">
+        <div className="flex gap-2">
+          <label style={{ flex: 1 }}><div style={label}>с</div>
+            <input type="date" value={woPeriod.from} onChange={(e) => { setWoTouched(true); setWoPeriod({ ...woPeriod, from: e.target.value }); }} style={STY.input} /></label>
+          <label style={{ flex: 1 }}><div style={label}>по</div>
+            <input type="date" value={woPeriod.to} onChange={(e) => { setWoTouched(true); setWoPeriod({ ...woPeriod, to: e.target.value }); }} style={STY.input} /></label>
+        </div>
+        <QtyTable q={woQty} onChange={setWoQty} color={PAL.coral} />
+        <div style={{ ...label, marginTop: 10 }}>Причина</div>
+        <div className="flex gap-2">
+          {[["перезабивка", "Перезабивка"], ["своя", "Своя причина"]].map(([k, l]) => (
+            <button key={k} onClick={() => setWoReason(k)}
+              style={{ flex: 1, border: `2px solid ${woReason === k ? PAL.sun : PAL.line}`, background: woReason === k ? PAL.sun + "22" : PAL.white, color: PAL.ink, borderRadius: 10, padding: "8px", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{l}</button>
+          ))}
+        </div>
+        {woReason === "своя" && <input value={woOwn} placeholder="напиши причину" onChange={(e) => setWoOwn(e.target.value)} style={{ ...STY.input, marginTop: 8 }} />}
+        <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
+          <Btn tone="coral" onClick={doWo} disabled={!woGrams}>Сохранить</Btn>
+          <span style={{ fontSize: 14, color: PAL.mute }}>{qtyCount(woQty)} шт · <b style={{ color: PAL.coral }}>−{woGrams} г</b></span>
+        </div>
+      </Card>
+
+      {/* ---------- файл ---------- */}
+      <Card style={{ gridColumn: "1 / -1" }} title="Из файла"
+        aside={
+          <div className="flex gap-1">
+            {[["add", "Поставка — добавить"], ["replace", "Инвентаризация — заменить"]].map(([k, l]) => (
+              <button key={k} onClick={() => setFileMode(k)} style={{ border: "none", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: fileMode === k ? PAL.panel : PAL.paper, color: fileMode === k ? PAL.panelText : PAL.mute }}>{l}</button>
             ))}
           </div>
+        }>
+        <div className="flex items-center gap-3 flex-wrap">
           <input ref={fileRef} type="file" accept="image/*,application/pdf" onChange={onFile} style={{ display: "none" }} />
-          <Btn tone="ink" onClick={() => fileRef.current?.click()} disabled={busy}>{busy ? "Читаю файл…" : "Выбрать файл"}</Btn>
+          <Btn tone="ink" onClick={() => fileRef.current?.click()} disabled={busy}>{busy ? "Читаю…" : "Выбрать фото или PDF"}</Btn>
+          <span style={{ fontSize: 13, color: PAL.mute }}>накладная или лист инвентаризации — посчитаю общий вес</span>
         </div>
-        {fileErr && <div style={{ marginTop: 10, fontSize: 13, color: PAL.coral }}>{fileErr}. Попробуй другое фото — чтобы названия и цифры были в кадре и читались.</div>}
+        {fileErr && <div style={{ marginTop: 10, fontSize: 13, color: PAL.coral }}>{fileErr}</div>}
+
         {found && (
           <div className="mt-3" style={{ padding: "12px 14px", borderRadius: 12, background: PAL.mintPale, fontSize: 14 }}>
             <div className="flex items-center gap-3 flex-wrap">
-              <span>В файле «{found.name}»: <b style={{ fontSize: 22 }}>{foundTotal} г</b> <span style={{ color: PAL.mute }}>({found.items.length} строк)</span>
-                {fileMode === "add"
-                  ? <span style={{ color: PAL.mute }}> · остаток станет <b style={{ color: PAL.ink }}>{stock + foundTotal} г</b></span>
-                  : <span style={{ color: PAL.mute }}> · сейчас {stock} г, разница <b style={{ color: foundTotal - stock >= 0 ? PAL.mintDeep : PAL.coral }}>{foundTotal - stock > 0 ? "+" : ""}{foundTotal - stock} г</b></span>}
-              </span>
-              {fileMode === "add"
-                ? <Btn onClick={() => { add({ type: "supply", grams: foundTotal, note: `накладная ${found.name}` }); setFound(null); setToast(`+${foundTotal} г на склад`); }} disabled={!foundTotal}>Добавить {foundTotal} г</Btn>
-                : <Btn onClick={() => { const diff = foundTotal - stock; if (diff) add({ type: "adjust", grams: diff, note: `инвентаризация по файлу ${found.name}` }); setFound(null); setToast(`Остаток: ${foundTotal} г`); }}>Заменить остаток на {foundTotal} г</Btn>}
+              <span>В файле «{found.name}»: <b style={{ fontSize: 22 }}>{foundTotal} г</b> <span style={{ color: PAL.mute }}>({found.items.length} строк)</span></span>
               <Btn tone="ghost" onClick={() => setFound((f) => ({ ...f, open: !f.open }))}>{found.open ? "Скрыть строки" : "Проверить строки"}</Btn>
-              <Btn tone="ghost" onClick={() => setFound(null)}>Отмена</Btn>
+              {!confirmFile && <Btn onClick={() => setConfirmFile(true)}>Далее</Btn>}
+              <Btn tone="ghost" onClick={() => { setFound(null); setConfirmFile(false); }}>Отмена</Btn>
             </div>
+
             {found.docTotal !== null && found.docTotal !== foundTotal && (
-              <div style={{ marginTop: 8, fontSize: 13, color: PAL.coral, fontWeight: 600 }}>В документе напечатан итог {found.docTotal} г, по строкам получилось {foundTotal} г — проверь строки, что-то прочиталось неверно.
-                <button onClick={() => setFound((f) => ({ ...f, items: [{ id: -1, name: "итог из документа", grams: f.docTotal, calc: "", assumed: false }], open: false }))} style={{ marginLeft: 8, border: "none", background: "transparent", color: PAL.mintDeep, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, textDecoration: "underline" }}>Взять итог из документа</button>
+              <div style={{ marginTop: 8, fontSize: 13, color: PAL.coral, fontWeight: 600 }}>
+                В документе напечатан итог {found.docTotal} г, по строкам {foundTotal} г — проверь строки.
+                <button onClick={() => setFound((f) => ({ ...f, items: [{ id: -1, name: "итог из документа", grams: f.docTotal, calc: "", assumed: false }], open: false }))}
+                  style={{ marginLeft: 8, border: "none", background: "transparent", color: PAL.mintDeep, cursor: "pointer", fontFamily: "inherit", fontWeight: 700, textDecoration: "underline" }}>Взять итог из документа</button>
               </div>
             )}
+
+            {confirmFile && (
+              <div style={{ marginTop: 10, padding: "12px 14px", borderRadius: 12, background: PAL.white, border: `2px solid ${PAL.mint}` }}>
+                <div style={{ fontWeight: 800, fontSize: 15 }}>Подтверди операцию</div>
+                <div style={{ fontSize: 14, marginTop: 6 }}>
+                  {fileMode === "add"
+                    ? <>Поступило <b>{foundTotal} г</b>. Остаток станет <b style={{ color: PAL.mintDeep }}>{stock + foundTotal} г</b> (сейчас {stock} г).</>
+                    : <>Остаток будет заменён на <b>{foundTotal} г</b>. Сейчас {stock} г, корректировка{" "}
+                      <b style={{ color: foundTotal - stock >= 0 ? PAL.mintDeep : PAL.coral }}>{foundTotal - stock > 0 ? "+" : ""}{foundTotal - stock} г</b>.</>}
+                </div>
+                <div className="flex gap-2" style={{ marginTop: 10 }}>
+                  <Btn onClick={applyFile}>Подтверждаю</Btn>
+                  <Btn tone="ghost" onClick={() => setConfirmFile(false)}>Назад</Btn>
+                </div>
+              </div>
+            )}
+
             {found.items.some((it) => it.assumed) && <div style={{ marginTop: 6, fontSize: 12, color: PAL.mute }}>Строки со звёздочкой — вес не указан, взято по 250 г за пачку.</div>}
             {found.open && (
               <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 10, background: PAL.white, borderRadius: 10, overflow: "hidden" }}>
@@ -907,23 +1042,41 @@ function TobaccoView({ setToast, ledger, setLedger }) {
         )}
       </Card>
 
-      {/* журнал */}
-      <Card title="Движения" aside={`${ledger.length} записей`} style={{ gridColumn: "span 12" }}>
-        <div style={{ overflowX: "auto", maxHeight: 440, overflowY: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 640 }}>
-            <thead><tr><th style={th}>Дата</th><th style={th}>Операция</th><th style={th}>Что</th><th style={{ ...th, textAlign: "right" }}>Шт</th><th style={{ ...th, textAlign: "right" }}>Граммы</th><th style={{ ...th, textAlign: "right" }}>Остаток</th><th style={th} /></tr></thead>
+      {/* ---------- журнал ---------- */}
+      <Card style={{ gridColumn: "1 / -1" }} title="Движения" aside={<span style={{ fontSize: 12, color: PAL.mute }}>{ledger.length} записей</span>}>
+        <div style={{ overflowX: "auto", maxHeight: 460, overflowY: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 760 }}>
+            <thead><tr>
+              <th style={th}>Дата</th><th style={th}>Операция</th><th style={th}>Что</th>
+              <th style={{ ...th, textAlign: "right" }}>Шт</th><th style={{ ...th, textAlign: "right" }}>Граммы</th>
+              <th style={{ ...th, textAlign: "right" }}>Остаток</th><th style={th} />
+            </tr></thead>
             <tbody>
-              {(() => { let bal = stock; return [...ledger].reverse().map((l) => { const row = (
-                <tr key={l.id}>
-                  <td style={{ ...td, color: PAL.mute, whiteSpace: "nowrap" }}>{fmtShort(new Date(l.date + "T12:00:00"))}{l.ts ? <span style={{ fontSize: 12 }}> {fmtTime(l.ts)}</span> : null}</td>
-                  <td style={td}><Pill color={TYPES[l.type].color}>{TYPES[l.type].label}</Pill></td>
-                  <td style={{ ...td, color: PAL.mute }}>{l.note}</td>
-                  <td style={num}>{l.qty || "—"}</td>
-                  <td style={{ ...num, fontWeight: 800, color: l.grams > 0 ? PAL.mintDeep : PAL.coral }}>{l.grams > 0 ? "+" : ""}{l.grams}</td>
-                  <td style={{ ...num, fontWeight: 700 }}>{bal}</td>
-                  <td style={{ ...td, textAlign: "right" }}><Btn small tone="coral" onClick={() => remove(l.id)}>×</Btn></td>
-                </tr>); bal -= l.grams; return row; }); })()}
-              {ledger.length === 0 && <tr><td colSpan={7} style={{ padding: 20, textAlign: "center", color: PAL.mute }}>Пока пусто — добавь табак</td></tr>}
+              {(() => { let bal = stock; return [...ledger].reverse().map((l) => {
+                const editing = editRow === l.id;
+                const row = (
+                  <tr key={l.id} style={{ background: editing ? PAL.mintPale : "transparent" }}>
+                    <td style={{ ...td, color: PAL.mute, whiteSpace: "nowrap" }}>{fmtShort(new Date(l.date + "T12:00:00"))}{l.ts ? <span style={{ fontSize: 12 }}> {fmtTime(l.ts)}</span> : null}</td>
+                    <td style={td}><Pill color={(TYPES[l.type] || TYPES.adjust).color}>{(TYPES[l.type] || TYPES.adjust).label}</Pill></td>
+                    <td style={{ ...td, color: PAL.mute }}>
+                      {editing ? <input value={editVals.note} onChange={(e) => setEditVals({ ...editVals, note: e.target.value })} style={{ ...STY.input, padding: "4px 8px" }} /> : l.note}
+                    </td>
+                    <td style={num}>{l.qty || "—"}</td>
+                    <td style={{ ...num, fontWeight: 800, color: l.grams > 0 ? PAL.mintDeep : PAL.coral }}>
+                      {editing
+                        ? <input type="number" value={editVals.grams} onChange={(e) => setEditVals({ ...editVals, grams: e.target.value })} style={{ ...STY.input, width: 90, padding: "4px 8px", textAlign: "right", fontWeight: 700 }} />
+                        : <>{l.grams > 0 ? "+" : ""}{l.grams}</>}
+                    </td>
+                    <td style={{ ...num, fontWeight: 700 }}>{bal}</td>
+                    <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                      {editing
+                        ? <span className="flex gap-1 justify-end"><Btn small onClick={saveEdit}>ОК</Btn><Btn small tone="ghost" onClick={() => setEditRow(null)}>Отмена</Btn></span>
+                        : <span className="flex gap-1 justify-end"><Btn small tone="ghost" onClick={() => startEdit(l)}>Изм.</Btn><Btn small tone="coral" onClick={() => remove(l.id)}>×</Btn></span>}
+                    </td>
+                  </tr>);
+                bal -= l.grams; return row;
+              }); })()}
+              {ledger.length === 0 && <tr><td colSpan={7} style={{ padding: 20, textAlign: "center", color: PAL.mute }}>Пока пусто</td></tr>}
             </tbody>
           </table>
         </div>
