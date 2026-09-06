@@ -342,12 +342,27 @@ if (BOT_TOKEN) {
   const setS = (ctx, v) => sess.set(ctx.chat.id, v);
   const clrS = (ctx) => sess.delete(ctx.chat.id);
 
-  const menu = new Keyboard()
-    .text("📊 Дэшборд").text("💰 Касса").row()
-    .text("🗓 График").text("👥 Смены").row()
-    .text("📦 Склад").text("📄 Поставка из файла").row()
-    .text("👤 Сотрудники").resized();
-  const staffMenu = new Keyboard().text("🗓 Мои смены").text("✍️ Заявка на смену").resized();
+  const pendCount = (s) => (s.requests || []).filter((r) => r.status === "new").length;
+  const menuOf = (s) => {
+    const n = pendCount(s);
+    return new Keyboard()
+      .text("📊 Дэшборд").text("💰 Касса").row()
+      .text("🗓 График").text("👥 Смены").row()
+      .text("📦 Склад").text("📄 Поставка из файла").row()
+      .text(n ? `✍️ Запросы на смену (${n})` : "✍️ Запросы на смену").text("👤 Сотрудники").resized();
+  };
+  const staffMenu = new Keyboard().text("🗓 Мои смены").text("✍️ Выбрать смену").resized();
+  const adminsOf = (s) => new Set(adminIds.concat(Object.entries(s.people || {}).filter(([, x]) => x.role === "admin").map(([id]) => id)));
+  const reqText = (r) => `✍️ ${r.type === "drop" ? "Просит снять смену" : "Заявка на смену"} · ${r.name}\n` +
+    r.items.map((i) => `${ruDay(i.day)} · ${KIND_LABEL[i.kind]}`).join("\n");
+  const reqKb = (id) => new InlineKeyboard().text("✅ Подтвердить", `req:ok:${id}`).text("✖️ Отклонить", `req:no:${id}`);
+  const sendRequest = async (ctx, req) => {
+    const s = await mutate((s) => { s.requests.push(req); });
+    for (const aid of adminsOf(s)) {
+      ctx.api.sendMessage(aid, reqText(req), { reply_markup: reqKb(req.id) }).catch(() => {});
+      ctx.api.sendMessage(aid, `Запросов без ответа: ${pendCount(s)}`, { reply_markup: menuOf(s) }).catch(() => {});
+    }
+  };
 
   // /id работает всегда — им узнают свой Telegram id
   bot.command("id", (ctx) => ctx.reply(`Твой Telegram id: ${ctx.from?.id}\nВпиши его в переменную ADMIN_ID на Render.`));
@@ -382,37 +397,95 @@ if (BOT_TOKEN) {
   });
 
   // ───── сотрудник ─────
+  const myDaysKb = () => {
+    const kb = new InlineKeyboard();
+    for (let i = 0; i < 14; i++) {
+      const d = isoAt(i);
+      kb.text(i === 0 ? `Сегодня · ${ruShort(d)}` : i === 1 ? `Завтра · ${ruShort(d)}` : ruDay(d), `my:d:${d}`);
+      if (i % 2 === 1) kb.row();
+    }
+    return kb;
+  };
+  const myShiftsText = (st, empId) => {
+    const mine = Object.entries(st.roster).filter(([, v]) => v === empId)
+      .map(([k]) => k.split("|")).filter(([d]) => d >= iso(Date.now())).sort();
+    const pend = (st.requests || []).filter((r) => r.empId === empId && r.status === "new");
+    return {
+      mine,
+      text: "🗓 Твои смены\n\n" + (mine.map(([d, k]) => `${ruDay(d)} · ${KIND_LABEL[k]}`).join("\n") || "Пока пусто")
+        + (pend.length ? "\n\nНа подтверждении у управляющего:\n" + pend.map((r) => r.items.map((i) => `${r.type === "drop" ? "снять " : ""}${ruDay(i.day)} · ${KIND_LABEL[i.kind]}`).join("\n")).join("\n") : ""),
+    };
+  };
+  const myShiftsKb = (mine) => {
+    const kb = new InlineKeyboard().text("➕ Добавить смену", "my:new").row();
+    mine.slice(0, 8).forEach(([d, k]) => kb.text(`✖️ Снять ${ruShort(d)} · ${KIND_LABEL[k]}`, `my:drop:${d}:${k}`).row());
+    return kb;
+  };
+
   bot.use(async (ctx, next) => {
     if (ctx.state.isAdmin) return next();
     const p = ctx.state.person;
-    const text = ctx.message?.text || "";
-    const emp = ctx.state.st.employees.find((e) => e.id === p.empId);
+    const st = ctx.state.st;
+    const emp = st.employees.find((e) => e.id === p.empId);
     const myName = emp?.name || p.name;
+    const cq = ctx.callbackQuery?.data;
 
-    if (text === "/start") return ctx.reply(`Привет, ${myName}! Пиши, когда хочешь работать: «завтра 1», «пт 2, сб 1». Заявка уйдёт управляющему.`, { reply_markup: staffMenu });
-    if (text === "🗓 Мои смены") {
-      const mine = Object.entries(ctx.state.st.roster).filter(([, v]) => v === p.empId)
-        .map(([k]) => k.split("|")).filter(([d]) => d >= iso(Date.now())).sort();
-      const pend = ctx.state.st.requests.filter((r) => r.empId === p.empId && r.status === "new");
-      return ctx.reply(mine.length || pend.length
-        ? "🗓 Твои смены:\n" + (mine.map(([d, k]) => `${ruDay(d)} · ${KIND_LABEL[k]}`).join("\n") || "—")
-          + (pend.length ? "\n\nНа подтверждении:\n" + pend.flatMap((r) => r.items.map((i) => `${ruDay(i.day)} · ${KIND_LABEL[i.kind]}`)).join("\n") : "")
-        : "Смен пока нет. Напиши, например, «завтра 1».");
+    if (cq) {
+      if (cq === "my:new") {
+        await ctx.answerCallbackQuery();
+        return ctx.editMessageText("На какой день хочешь выйти?", { reply_markup: myDaysKb() });
+      }
+      if (cq.startsWith("my:d:")) {
+        const day = cq.slice(5);
+        await ctx.answerCallbackQuery();
+        return ctx.editMessageText(`${ruDay(day)} — какая смена?`, {
+          reply_markup: new InlineKeyboard()
+            .text("1-я смена", `my:k:${day}:day`).text("2-я смена", `my:k:${day}:night`).row()
+            .text("← Другой день", "my:new"),
+        });
+      }
+      if (cq.startsWith("my:k:")) {
+        const [day, kind] = cq.slice(5).split(":");
+        const taken = st.roster[`${day}|${kind}`];
+        await ctx.answerCallbackQuery();
+        const who = taken && taken !== p.empId ? empName(st, taken) : null;
+        return ctx.editMessageText(
+          `${ruDay(day)} · ${KIND_LABEL[kind]} смена` + (who ? `\nСейчас записан ${who} — попрошу управляющего о замене.` : "") + "\n\nОтправить запрос?",
+          { reply_markup: new InlineKeyboard().text("✅ Отправить", `my:send:${day}:${kind}`).text("✖️ Отмена", "my:list") });
+      }
+      if (cq.startsWith("my:send:")) {
+        const [day, kind] = cq.slice(8).split(":");
+        await ctx.answerCallbackQuery("Отправлено");
+        await sendRequest(ctx, { id: uid(), empId: p.empId, name: myName, type: "add", items: [{ day, kind, name: myName }], ts: Date.now(), status: "new" });
+        return ctx.editMessageText(`✅ Запрос отправлен: ${ruDay(day)} · ${KIND_LABEL[kind]} смена.\nКак ответят — напишу.`);
+      }
+      if (cq.startsWith("my:drop:")) {
+        const [day, kind] = cq.slice(8).split(":");
+        await ctx.answerCallbackQuery("Отправлено");
+        await sendRequest(ctx, { id: uid(), empId: p.empId, name: myName, type: "drop", items: [{ day, kind, name: myName }], ts: Date.now(), status: "new" });
+        return ctx.editMessageText(`✅ Запрос отправлен: снять ${ruDay(day)} · ${KIND_LABEL[kind]} смену.`);
+      }
+      if (cq === "my:list") {
+        const r = myShiftsText(st, p.empId);
+        await ctx.answerCallbackQuery();
+        return ctx.editMessageText(r.text, { reply_markup: myShiftsKb(r.mine) });
+      }
+      await ctx.answerCallbackQuery();
+      return;
     }
-    if (text === "✍️ Заявка на смену") return ctx.reply("Напиши, когда готов работать: «завтра 1», «пт 2, сб 1».");
+
+    const text = ctx.message?.text || "";
+    if (text === "/start") return ctx.reply(`Привет, ${myName}! Здесь можно посмотреть свои смены и попроситься на новые.`, { reply_markup: staffMenu });
+    if (text === "🗓 Мои смены") {
+      const r = myShiftsText(st, p.empId);
+      return ctx.reply(r.text, { reply_markup: myShiftsKb(r.mine) });
+    }
+    if (text === "✍️ Выбрать смену") return ctx.reply("На какой день хочешь выйти?", { reply_markup: myDaysKb() });
 
     const items = parseRoster(text, myName);
-    if (!items.length) return ctx.reply("Не понял. Напиши, например: «завтра 1» или «пт 2, сб 1».");
-    const req = { id: uid(), empId: p.empId, name: myName, items, ts: Date.now(), status: "new" };
-    await mutate((s) => { s.requests.push(req); });
-    const list = items.map((i) => `${ruDay(i.day)} · ${KIND_LABEL[i.kind]}`).join("\n");
-    const admins = new Set(adminIds.concat(Object.entries(ctx.state.st.people).filter(([, x]) => x.role === "admin").map(([id]) => id)));
-    for (const aid of admins) {
-      ctx.api.sendMessage(aid, `✍️ Заявка от ${myName}:\n${list}`, {
-        reply_markup: new InlineKeyboard().text("✅ Подтвердить", `req:ok:${req.id}`).text("✖️ Отклонить", `req:no:${req.id}`),
-      }).catch(() => {});
-    }
-    return ctx.reply("Отправил управляющему:\n" + list);
+    if (!items.length) return ctx.reply("Нажми «Выбрать смену» или напиши, например: «завтра 1».", { reply_markup: staffMenu });
+    await sendRequest(ctx, { id: uid(), empId: p.empId, name: myName, type: "add", items, ts: Date.now(), status: "new" });
+    return ctx.reply("Отправил управляющему:\n" + items.map((i) => `${ruDay(i.day)} · ${KIND_LABEL[i.kind]}`).join("\n"));
   });
 
   bot.command("start", (ctx) => { clrS(ctx); ctx.reply(
@@ -423,7 +496,17 @@ if (BOT_TOKEN) {
     "• «касса за сегодня 52000, 21 кальян»\n" +
     "• «пришла поставка табака»\n" +
     "• «продали 14 классики и 3 фрукта»\n" +
-    "• «сколько табака на складе»", { reply_markup: menu }); });
+    "• «сколько табака на складе»", { reply_markup: menuOf(ctx.state.st) }); });
+
+  // ═════════ ЗАПРОСЫ НА СМЕНУ ═════════
+  bot.hears(/^✍️ Запросы на смену/, async (ctx) => {
+    clrS(ctx);
+    const s = await loadState();
+    const pend = (s.requests || []).filter((r) => r.status === "new");
+    if (!pend.length) return ctx.reply("Новых запросов нет.", { reply_markup: menuOf(s) });
+    await ctx.reply(`Запросов без ответа: ${pend.length}`, { reply_markup: menuOf(s) });
+    for (const r of pend) await ctx.reply(reqText(r), { reply_markup: reqKb(r.id) });
+  });
 
   // ═════════ ДЭШБОРД ═════════
   const dashText = (s) => {
@@ -467,7 +550,12 @@ if (BOT_TOKEN) {
     .text("💰 Заполнить кассу", "c:pick:0").text("📦 Склад", "w:show").row()
     .text("🗓 График", "g:0");
 
-  bot.hears("📊 Дэшборд", async (ctx) => { clrS(ctx); ctx.reply(dashText(await loadState()), { reply_markup: dashKb }); });
+  bot.hears("📊 Дэшборд", async (ctx) => {
+    clrS(ctx);
+    const s = await loadState();
+    await ctx.reply(dashText(s), { reply_markup: dashKb });
+    if (pendCount(s)) await ctx.reply(`✍️ Запросов на смену без ответа: ${pendCount(s)}`, { reply_markup: menuOf(s) });
+  });
 
   // ═════════ КАССА ═════════
   const cashText = (s, day) => {
@@ -887,14 +975,18 @@ if (BOT_TOKEN) {
       req = s.requests.find((r) => r.id === id);
       if (!req || req.status !== "new") return;
       req.status = verdict === "ok" ? "ok" : "no";
-      if (verdict === "ok") applyRoster(s, req.items);
+      if (verdict === "ok") {
+        if (req.type === "drop") for (const it of req.items) { if (s.roster[`${it.day}|${it.kind}`] === req.empId) delete s.roster[`${it.day}|${it.kind}`]; }
+        else applyRoster(s, req.items);
+      }
     });
     await ctx.answerCallbackQuery();
     if (!req) return ctx.editMessageText("Заявка уже обработана.");
     const list = req.items.map((i) => `${ruShort(i.day)} · ${KIND_LABEL[i.kind]}`).join(", ");
+    const what = req.type === "drop" ? "снятие смен" : "смены";
     await ctx.editMessageText(`${verdict === "ok" ? "✅ Подтверждено" : "✖️ Отклонено"} · ${req.name}: ${list}`);
     const tg = Object.entries(s.people).find(([, p]) => p.empId === req.empId);
-    if (tg) ctx.api.sendMessage(tg[0], verdict === "ok" ? `✅ Смены подтверждены: ${list}` : `✖️ Заявку отклонили: ${list}`).catch(() => {});
+    if (tg) ctx.api.sendMessage(tg[0], verdict === "ok" ? `✅ Подтвердили ${what}: ${list}` : `✖️ Отклонили ${what}: ${list}`).catch(() => {});
   });
 
   // ═════════ СВОБОДНЫЙ ТЕКСТ ═════════
@@ -977,7 +1069,7 @@ if (BOT_TOKEN) {
           "• «списать 2 классики перезабивка»\n" +
           "• «инвентаризация 7450»\n" +
           "• «сколько на складе», «график на следующую неделю»",
-          { reply_markup: menu });
+          { reply_markup: menuOf(s) });
     }
   };
 
