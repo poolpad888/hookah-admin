@@ -73,7 +73,12 @@ h1,h2,h3{letter-spacing:-.018em;margin:0}
   transition:box-shadow .3s var(--ease), background .3s var(--ease)}
 .wrap{max-width:1280px;margin:0 auto;width:100%;padding-left:24px;padding-right:24px}
 @media (max-width:640px){.wrap{padding-left:14px;padding-right:14px}}
-@media (max-width:900px){.grid12>section{grid-column:span 12 !important}}
+@media (max-width:900px){.grid12>*{grid-column:span 12 !important}}
+@media (max-width:640px){
+  .glass{border-radius:18px}
+  .grid12>section, .grid12 section.glass{padding-left:16px !important;padding-right:16px !important}
+  .scrollx{overflow-x:auto;-webkit-overflow-scrolling:touch}
+}
 .glass2{background:var(--glass2);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%)}
 .lift:hover{box-shadow:var(--shl), inset 0 1px 0 var(--hi)}
 button{transition:transform .18s var(--ease),background .2s var(--ease),box-shadow .2s var(--ease),opacity .2s var(--ease),filter .2s var(--ease)}
