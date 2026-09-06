@@ -19,8 +19,8 @@ const api = async (method, url, body) => {
 const LIGHT = {
   ink: "#08302A", mint: "#12B892", mintDeep: "#0A8A6B", mintPale: "rgba(18,184,146,.14)",
   paper: "rgba(255,255,255,.5)", white: "rgba(255,255,255,.72)",
-  coral: "#E24E33", sun: "#D9902A", sky: "#2E7FF5", lilac: "#7C5CF0",
-  mute: "#5C7C75", line: "rgba(8,48,42,.10)",
+  coral: "#CF3F22", sun: "#B0731A", sky: "#1F63D6", lilac: "#6647D9",
+  mute: "#4C6B65", line: "rgba(8,48,42,.12)",
   panel: "rgba(8,40,35,.86)", panelText: "#F1FBF7", panelSoft: "rgba(241,251,247,.66)",
   solid: "#08302A", lowBg: "rgba(226,78,51,.10)", cellBg: "rgba(255,255,255,.55)",
   onMint: "#04241C",
@@ -28,8 +28,8 @@ const LIGHT = {
 const DARK = {
   ink: "#E9F6F1", mint: "#34E0B4", mintDeep: "#6BEBCB", mintPale: "rgba(52,224,180,.16)",
   paper: "rgba(255,255,255,.05)", white: "rgba(255,255,255,.075)",
-  coral: "#FF7F66", sun: "#FFC061", sky: "#6FAEFF", lilac: "#B49BFF",
-  mute: "#95B7AF", line: "rgba(255,255,255,.11)",
+  coral: "#FF9078", sun: "#FFCE7A", sky: "#8FC0FF", lilac: "#C3AEFF",
+  mute: "#A9C9C1", line: "rgba(255,255,255,.13)",
   panel: "rgba(255,255,255,.10)", panelText: "#E9F6F1", panelSoft: "rgba(233,246,241,.62)",
   solid: "#10201C", lowBg: "rgba(255,127,102,.12)", cellBg: "rgba(255,255,255,.06)",
   onMint: "#04241C",
@@ -71,6 +71,9 @@ h1,h2,h3{letter-spacing:-.018em;margin:0}
   -webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);
   box-shadow:var(--sh), inset 0 1px 0 var(--hi);
   transition:box-shadow .3s var(--ease), background .3s var(--ease)}
+.wrap{max-width:1280px;margin:0 auto;width:100%;padding-left:24px;padding-right:24px}
+@media (max-width:640px){.wrap{padding-left:14px;padding-right:14px}}
+@media (max-width:900px){.grid12>section{grid-column:span 12 !important}}
 .glass2{background:var(--glass2);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%)}
 .lift:hover{box-shadow:var(--shl), inset 0 1px 0 var(--hi)}
 button{transition:transform .18s var(--ease),background .2s var(--ease),box-shadow .2s var(--ease),opacity .2s var(--ease),filter .2s var(--ease)}
@@ -78,7 +81,7 @@ button:not(:disabled):active{transform:scale(.96)}
 button:not(:disabled):hover{filter:brightness(1.04)}
 input,select,textarea{transition:border-color .2s var(--ease),box-shadow .2s var(--ease),background .2s var(--ease)}
 input:focus,select:focus,textarea:focus{box-shadow:0 0 0 3.5px rgba(18,184,146,.28)}
-input::placeholder,textarea::placeholder{opacity:.55}
+input::placeholder,textarea::placeholder{opacity:.7}
 :focus-visible{outline:none;box-shadow:0 0 0 3.5px rgba(18,184,146,.32)}
 table{border-collapse:collapse}
 th,td{font-variant-numeric:tabular-nums}
@@ -265,7 +268,8 @@ export default function HookahAdmin() {
 
   return (
     <div style={{ minHeight: "100vh", color: PAL.ink }}>
-      <header style={{ position: "sticky", top: 0, zIndex: 20, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", flexWrap: "wrap", gap: 12, background: dark ? "rgba(6,17,14,.6)" : "rgba(237,247,243,.6)", backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", borderBottom: `1px solid ${PAL.line}` }}>
+      <header style={{ position: "sticky", top: 0, zIndex: 20, background: dark ? "rgba(6,17,14,.6)" : "rgba(237,247,243,.6)", backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", borderBottom: `1px solid ${PAL.line}` }}>
+        <div className="wrap flex items-center justify-between gap-3 flex-wrap" style={{ paddingTop: 12, paddingBottom: 12 }}>
         <div className="flex items-center gap-3">
           <div style={{ width: 38, height: 38, borderRadius: 13, background: `linear-gradient(180deg, ${PAL.mint}, ${PAL.mintDeep})`, display: "grid", placeItems: "center", fontWeight: 700, color: PAL.onMint, fontSize: 18, boxShadow: "0 5px 14px rgba(18,184,146,.3)", flex: "none" }}>М</div>
           <div style={{ lineHeight: 1.25 }}>
@@ -278,10 +282,10 @@ export default function HookahAdmin() {
           className="glass" style={{ width: 42, height: 42, borderRadius: 14, cursor: "pointer", fontSize: 17, display: "grid", placeItems: "center", color: PAL.ink }}>
           {dark ? "☀" : "☾"}
         </button>
-        <nav className="glass" style={{ display: "flex", borderRadius: 15, padding: 4, gap: 4 }}>
+        <nav className="glass" style={{ display: "flex", alignItems: "center", height: 42, borderRadius: 14, padding: 4, gap: 4 }}>
           {[["tobacco", "Табак"], ["staff", "Смены"]].map(([k, l]) => (
             <button key={k} onClick={() => setView(k)}
-              style={{ border: view === k ? "1px solid rgba(255,255,255,.28)" : "1px solid transparent", borderRadius: 11, padding: "8px 20px", fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "inherit",
+              style={{ border: view === k ? "1px solid rgba(255,255,255,.28)" : "1px solid transparent", borderRadius: 11, height: 34, padding: "0 20px", fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "inherit",
                 background: view === k ? `linear-gradient(180deg, ${PAL.mint}, ${PAL.mintDeep})` : "transparent",
                 color: view === k ? PAL.onMint : PAL.mute,
                 boxShadow: view === k ? "0 4px 12px rgba(18,184,146,.26), inset 0 1px 0 rgba(255,255,255,.4)" : "none" }}>
@@ -290,9 +294,10 @@ export default function HookahAdmin() {
           ))}
         </nav>
         </div>
+        </div>
       </header>
 
-      <main style={{ padding: "18px 24px 48px", maxWidth: 1280, margin: "0 auto" }}>
+      <main className="wrap" style={{ paddingTop: 20, paddingBottom: 48 }}>
         {view === "tobacco"
           ? <TobaccoView setToast={setToast} ledger={ledger} setLedger={setLedger} daily={daily} inventories={inventories} setInventories={setInventories} />
           : <StaffView employees={employees} setEmployees={setEmployees} shifts={shifts} setShifts={setShifts} setToast={setToast}
@@ -540,7 +545,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
   const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
 
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
+    <div className="grid12 grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))", alignItems: "start" }}>
       <Card style={{ gridColumn: "span 8" }} title={`Сегодня · ${DAYS_RU[(TODAY.getDay() + 6) % 7]}, ${fmtShort(TODAY)}`}
         aside={<span style={{ fontSize: 12, color: PAL.mute }}>общая касса за день</span>}>
         <div className="flex gap-3 flex-wrap">
@@ -1034,9 +1039,9 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
   const label = { fontSize: 11, color: PAL.mute, marginBottom: 3 };
 
   return (
-    <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
+    <div className="grid12 grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))", alignItems: "start" }}>
       {/* ---------- расчётный остаток ---------- */}
-      <section className="glass" style={{ gridColumn: "span 7", background: PAL.solid, color: PAL.panelText, borderRadius: 22, padding: "22px 24px", border: "1px solid rgba(255,255,255,.1)" }}>
+      <section className="glass" style={{ gridColumn: "span 7", background: PAL.solid, color: PAL.panelText, borderRadius: 22, padding: "20px 22px", border: "1px solid rgba(255,255,255,.1)" }}>
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
             <div style={{ fontSize: 13, color: PAL.panelSoft }}>Расчётный остаток на складе</div>
