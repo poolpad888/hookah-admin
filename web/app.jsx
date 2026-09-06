@@ -15,18 +15,79 @@ const api = async (method, url, body) => {
   return j;
 };
 
-// ---------- палитра "мята" ----------
+// ---------- палитра "мята" · жидкое стекло ----------
 const LIGHT = {
-  ink: "#0E2F2B", mint: "#19C39A", mintDeep: "#0F8F70", mintPale: "#DDF7EF",
-  paper: "#F4FBF8", white: "#FFFFFF", coral: "#F2634A", sun: "#F5B841", sky: "#3A8DFF", lilac: "#8E6CF2",
-  mute: "#6B8A84", line: "#D5EAE3", panel: "#0E2F2B", panelText: "#FFFFFF", panelSoft: "#B7E8D8", lowBg: "#FFF3F0", cellBg: "rgba(255,255,255,.7)",
+  ink: "#08302A", mint: "#12B892", mintDeep: "#0A8A6B", mintPale: "rgba(18,184,146,.14)",
+  paper: "rgba(255,255,255,.5)", white: "rgba(255,255,255,.72)",
+  coral: "#E24E33", sun: "#D9902A", sky: "#2E7FF5", lilac: "#7C5CF0",
+  mute: "#5C7C75", line: "rgba(8,48,42,.10)",
+  panel: "rgba(8,40,35,.86)", panelText: "#F1FBF7", panelSoft: "rgba(241,251,247,.66)",
+  solid: "#08302A", lowBg: "rgba(226,78,51,.10)", cellBg: "rgba(255,255,255,.55)",
+  onMint: "#04241C",
 };
 const DARK = {
-  ink: "#E6F4EF", mint: "#2BD7AB", mintDeep: "#5FE3C0", mintPale: "#173A33",
-  paper: "#0C1A16", white: "#162924", coral: "#FF7A62", sun: "#FFC857", sky: "#5CA3FF", lilac: "#A98CFF",
-  mute: "#9CC2B9", line: "#27453E", panel: "#0C2B24", panelText: "#EAF7F2", panelSoft: "#8FD9C2", lowBg: "#402A24", cellBg: "rgba(255,255,255,.06)",
+  ink: "#E9F6F1", mint: "#34E0B4", mintDeep: "#6BEBCB", mintPale: "rgba(52,224,180,.16)",
+  paper: "rgba(255,255,255,.05)", white: "rgba(255,255,255,.075)",
+  coral: "#FF7F66", sun: "#FFC061", sky: "#6FAEFF", lilac: "#B49BFF",
+  mute: "#95B7AF", line: "rgba(255,255,255,.11)",
+  panel: "rgba(255,255,255,.10)", panelText: "#E9F6F1", panelSoft: "rgba(233,246,241,.62)",
+  solid: "#10201C", lowBg: "rgba(255,127,102,.12)", cellBg: "rgba(255,255,255,.06)",
+  onMint: "#04241C",
 };
 const PAL = { ...LIGHT };
+
+const CSS = `
+:root { --ease: cubic-bezier(.32,.72,0,1); }
+html[data-theme="light"]{
+  --bg:#EDF7F3;
+  --b1:rgba(18,184,146,.26); --b2:rgba(46,127,245,.18); --b3:rgba(124,92,240,.14);
+  --glass:rgba(255,255,255,.6); --glass2:rgba(255,255,255,.8);
+  --brd:rgba(255,255,255,.8); --hi:rgba(255,255,255,.9);
+  --sh:0 1px 1px rgba(8,48,42,.04), 0 10px 30px rgba(8,48,42,.07);
+  --shl:0 1px 1px rgba(8,48,42,.05), 0 16px 42px rgba(8,48,42,.11);
+  --scroll:rgba(8,48,42,.18);
+}
+html[data-theme="dark"]{
+  --bg:#06110E;
+  --b1:rgba(52,224,180,.18); --b2:rgba(111,174,255,.14); --b3:rgba(180,155,255,.12);
+  --glass:rgba(255,255,255,.055); --glass2:rgba(255,255,255,.09);
+  --brd:rgba(255,255,255,.12); --hi:rgba(255,255,255,.14);
+  --sh:0 1px 1px rgba(0,0,0,.3), 0 14px 34px rgba(0,0,0,.45);
+  --shl:0 1px 1px rgba(0,0,0,.35), 0 20px 46px rgba(0,0,0,.55);
+  --scroll:rgba(255,255,255,.2);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);overflow-x:hidden;
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text","SF Pro Display",Inter,system-ui,sans-serif;
+  -webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale;
+  font-variant-numeric:tabular-nums;text-rendering:optimizeLegibility}
+body::before{content:"";position:fixed;inset:-20vh -10vw;z-index:-1;pointer-events:none;filter:blur(24px);
+  background:
+    radial-gradient(48vw 42vw at 10% 2%, var(--b1), transparent 62%),
+    radial-gradient(44vw 40vw at 94% 10%, var(--b2), transparent 60%),
+    radial-gradient(52vw 46vw at 66% 98%, var(--b3), transparent 62%)}
+h1,h2,h3{letter-spacing:-.018em;margin:0}
+.glass{background:var(--glass);border:1px solid var(--brd);
+  -webkit-backdrop-filter:blur(30px) saturate(180%);backdrop-filter:blur(30px) saturate(180%);
+  box-shadow:var(--sh), inset 0 1px 0 var(--hi);
+  transition:box-shadow .3s var(--ease), background .3s var(--ease)}
+.glass2{background:var(--glass2);-webkit-backdrop-filter:blur(18px) saturate(160%);backdrop-filter:blur(18px) saturate(160%)}
+.lift:hover{box-shadow:var(--shl), inset 0 1px 0 var(--hi)}
+button{transition:transform .18s var(--ease),background .2s var(--ease),box-shadow .2s var(--ease),opacity .2s var(--ease),filter .2s var(--ease)}
+button:not(:disabled):active{transform:scale(.96)}
+button:not(:disabled):hover{filter:brightness(1.04)}
+input,select,textarea{transition:border-color .2s var(--ease),box-shadow .2s var(--ease),background .2s var(--ease)}
+input:focus,select:focus,textarea:focus{box-shadow:0 0 0 3.5px rgba(18,184,146,.28)}
+input::placeholder,textarea::placeholder{opacity:.55}
+:focus-visible{outline:none;box-shadow:0 0 0 3.5px rgba(18,184,146,.32)}
+table{border-collapse:collapse}
+th,td{font-variant-numeric:tabular-nums}
+.num{text-align:right;font-variant-numeric:tabular-nums}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:var(--scroll);border-radius:99px;border:3px solid transparent;background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+@media (prefers-reduced-motion: reduce){*{transition:none !important;animation:none !important}}
+`;
 const BRAND_COLORS = [PAL.mint, PAL.sky, PAL.lilac, PAL.sun, PAL.coral, "#2FB3C6", "#E058A8"];
 const EMP_COLORS = [PAL.mint, PAL.sky, PAL.lilac, PAL.sun, PAL.coral, "#2FB3C6", "#E058A8", "#7AC943"];
 
@@ -44,11 +105,11 @@ const SEED_EMPLOYEES = ["Артём", "Даша", "Максим", "Лена"].ma
 
 // ---------- мелкие компоненты ----------
 const Card = ({ title, aside, children, style }) => (
-  <section style={{ background: PAL.white, border: `1px solid ${PAL.line}`, borderRadius: 18, padding: "18px 20px", ...style }}>
+  <section className="glass lift" style={{ borderRadius: 22, padding: "20px 22px", color: PAL.ink, ...style }}>
     {(title || aside) && (
-      <div className="flex items-baseline justify-between mb-3 gap-3">
-        {title && <h2 style={{ fontSize: 17, fontWeight: 700, color: PAL.ink, margin: 0 }}>{title}</h2>}
-        {aside && <div style={{ fontSize: 13, color: PAL.mute }}>{aside}</div>}
+      <div className="flex items-center justify-between gap-3 flex-wrap" style={{ marginBottom: 14, minHeight: 30 }}>
+        {title && <h2 style={{ fontSize: 17, fontWeight: 650, color: PAL.ink, lineHeight: 1.25 }}>{title}</h2>}
+        {aside && <div style={{ fontSize: 13, color: PAL.mute, fontWeight: 500 }}>{aside}</div>}
       </div>
     )}
     {children}
@@ -57,27 +118,27 @@ const Card = ({ title, aside, children, style }) => (
 
 const Btn = ({ children, onClick, tone = "mint", small, disabled }) => {
   const tones = {
-    mint: { background: PAL.mint, color: PAL.ink },
-    ghost: { background: PAL.mintPale, color: PAL.mintDeep },
-    coral: { background: "#FDE4DF", color: PAL.coral },
-    ink: { background: PAL.panel, color: PAL.panelText },
+    mint: { background: `linear-gradient(180deg, ${PAL.mint}, ${PAL.mintDeep})`, color: PAL.onMint, border: "1px solid rgba(255,255,255,.28)", boxShadow: "0 4px 14px rgba(18,184,146,.28), inset 0 1px 0 rgba(255,255,255,.4)" },
+    ghost: { background: PAL.mintPale, color: PAL.mintDeep, border: `1px solid ${PAL.mintPale}` },
+    coral: { background: PAL.lowBg, color: PAL.coral, border: `1px solid ${PAL.lowBg}` },
+    ink: { background: PAL.panel, color: PAL.panelText, border: `1px solid ${PAL.line}` },
   };
   return (
     <button onClick={onClick} disabled={disabled}
-      style={{ ...tones[tone], border: "none", borderRadius: 10, padding: small ? "6px 10px" : "9px 14px", fontWeight: 700, fontSize: small ? 12 : 14, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.45 : 1, fontFamily: "inherit" }}>
+      style={{ ...tones[tone], borderRadius: small ? 9 : 12, padding: small ? "6px 11px" : "9px 15px", fontWeight: 600, fontSize: small ? 12.5 : 14, letterSpacing: -0.1, lineHeight: 1.2, cursor: disabled ? "not-allowed" : "pointer", opacity: disabled ? 0.4 : 1, fontFamily: "inherit", whiteSpace: "nowrap" }}>
       {children}
     </button>
   );
 };
 
 const STY = {
-  get input() { return { border: `1px solid ${PAL.line}`, borderRadius: 10, padding: "8px 10px", fontSize: 14, color: PAL.ink, background: PAL.white, fontFamily: "inherit", outline: "none", width: "100%" }; },
-  get tip() { return { background: PAL.panel, border: "none", borderRadius: 10, color: PAL.panelText, fontSize: 12 }; },
+  get input() { return { border: `1px solid ${PAL.line}`, borderRadius: 12, padding: "9px 12px", fontSize: 14, fontWeight: 500, color: PAL.ink, background: PAL.white, fontFamily: "inherit", outline: "none", width: "100%" }; },
+  get tip() { return { background: PAL.solid, border: "none", borderRadius: 12, color: PAL.panelText, fontSize: 12, boxShadow: "0 10px 30px rgba(0,0,0,.28)", padding: "6px 10px" }; },
 };
 
 const Pill = ({ color, children, light }) => (
-  <span style={{ background: light ? "rgba(255,255,255,.14)" : color + "22", color: light ? "#FFFFFF" : PAL.ink, borderRadius: 999, padding: "2px 9px", fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 }}>
-    <span style={{ width: 8, height: 8, borderRadius: 4, background: color, display: "inline-block" }} />{children}
+  <span style={{ background: light ? "rgba(255,255,255,.12)" : color + "1F", border: `1px solid ${light ? "rgba(255,255,255,.14)" : color + "2E"}`, color: light ? PAL.panelText : PAL.ink, borderRadius: 999, padding: "3px 10px", fontSize: 12, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6, lineHeight: 1.35 }}>
+    <span style={{ width: 7, height: 7, borderRadius: 4, background: color, display: "inline-block", flex: "none" }} />{children}
   </span>
 );
 
@@ -168,48 +229,62 @@ export default function HookahAdmin() {
   useEffect(() => {
     const l = document.createElement("link");
     l.rel = "stylesheet";
-    l.href = "https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap";
+    l.href = "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap";
     document.head.appendChild(l);
-    return () => document.head.removeChild(l);
+    const st = document.createElement("style");
+    st.textContent = CSS;
+    document.head.appendChild(st);
+    return () => { document.head.removeChild(l); document.head.removeChild(st); };
   }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    const m = document.querySelector('meta[name="theme-color"]') || document.head.appendChild(Object.assign(document.createElement("meta"), { name: "theme-color" }));
+    m.setAttribute("content", dark ? "#06110E" : "#EDF7F3");
+  }, [dark]);
 
   useEffect(() => { if (!toast) return; const t = setTimeout(() => setToast(null), 2200); return () => clearTimeout(t); }, [toast]);
 
   if (!loaded || !authed) return (
-    <div style={{ minHeight: "100vh", background: PAL.paper, fontFamily: "Manrope, system-ui, sans-serif", color: PAL.ink, display: "grid", placeItems: "center" }}>
+    <div style={{ minHeight: "100vh", color: PAL.ink, display: "grid", placeItems: "center", padding: 20 }}>
       {loaded && (
-        <div style={{ background: PAL.white, border: `1px solid ${PAL.line}`, borderRadius: 18, padding: 28, width: 320, boxShadow: "0 10px 40px rgba(14,47,43,.08)" }}>
-          <div style={{ fontWeight: 800, fontSize: 22, marginBottom: 4 }}>Мята — админ</div>
-          <div style={{ fontSize: 13, color: PAL.mute, marginBottom: 16 }}>Введи пароль управляющего</div>
+        <div className="glass" style={{ borderRadius: 26, padding: 30, width: 340 }}>
+          <div style={{ width: 44, height: 44, borderRadius: 15, background: `linear-gradient(180deg, ${PAL.mint}, ${PAL.mintDeep})`, display: "grid", placeItems: "center", fontWeight: 700, color: PAL.onMint, fontSize: 20, marginBottom: 16, boxShadow: "0 6px 18px rgba(18,184,146,.3)" }}>М</div>
+          <div style={{ fontWeight: 700, fontSize: 22, letterSpacing: -0.5, marginBottom: 5 }}>Мята — админ</div>
+          <div style={{ fontSize: 13.5, color: PAL.mute, marginBottom: 18, lineHeight: 1.4 }}>Введи пароль управляющего</div>
           <input type="password" value={pwd} onChange={(e) => setPwd(e.target.value)} onKeyDown={(e) => e.key === "Enter" && login()} autoFocus
-            style={{ width: "100%", boxSizing: "border-box", border: `1px solid ${PAL.line}`, borderRadius: 10, padding: "10px 12px", fontSize: 15, fontFamily: "inherit", background: PAL.paper, color: PAL.ink }} />
-          {fatal && <div style={{ color: PAL.coral, fontSize: 12, marginTop: 8 }}>Ошибка: {fatal}</div>}
-          {pwdErr && <div style={{ color: PAL.coral, fontSize: 13, marginTop: 8 }}>{pwdErr}</div>}
-          <button onClick={login} style={{ marginTop: 14, width: "100%", border: "none", borderRadius: 10, padding: "10px", background: PAL.mint, color: PAL.ink, fontWeight: 700, fontSize: 15, cursor: "pointer", fontFamily: "inherit" }}>Войти</button>
+            placeholder="Пароль"
+            style={{ ...STY.input, padding: "11px 14px", fontSize: 15, borderRadius: 13 }} />
+          {fatal && <div style={{ color: PAL.coral, fontSize: 12, marginTop: 10 }}>Ошибка: {fatal}</div>}
+          {pwdErr && <div style={{ color: PAL.coral, fontSize: 13, marginTop: 10 }}>{pwdErr}</div>}
+          <button onClick={login} style={{ marginTop: 16, width: "100%", border: "1px solid rgba(255,255,255,.28)", borderRadius: 13, padding: "12px", background: `linear-gradient(180deg, ${PAL.mint}, ${PAL.mintDeep})`, color: PAL.onMint, fontWeight: 650, fontSize: 15, cursor: "pointer", fontFamily: "inherit", boxShadow: "0 6px 18px rgba(18,184,146,.28), inset 0 1px 0 rgba(255,255,255,.4)" }}>Войти</button>
         </div>
       )}
     </div>
   );
 
   return (
-    <div style={{ minHeight: "100vh", background: PAL.paper, fontFamily: "Manrope, system-ui, sans-serif", color: PAL.ink }}>
-      <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "18px 24px 10px", flexWrap: "wrap", gap: 12 }}>
+    <div style={{ minHeight: "100vh", color: PAL.ink }}>
+      <header style={{ position: "sticky", top: 0, zIndex: 20, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "12px 24px", flexWrap: "wrap", gap: 12, background: dark ? "rgba(6,17,14,.6)" : "rgba(237,247,243,.6)", backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", borderBottom: `1px solid ${PAL.line}` }}>
         <div className="flex items-center gap-3">
-          <div style={{ width: 38, height: 38, borderRadius: 12, background: PAL.mint, display: "grid", placeItems: "center", fontWeight: 800, color: PAL.ink, fontSize: 18 }}>М</div>
-          <div>
-            <div style={{ fontWeight: 800, fontSize: 20, letterSpacing: -0.4 }}>Мята — админ</div>
-            <div style={{ fontSize: 12, color: PAL.mute }}>{DAYS_RU[(TODAY.getDay() + 6) % 7]}, {fmtShort(TODAY)}</div>
+          <div style={{ width: 38, height: 38, borderRadius: 13, background: `linear-gradient(180deg, ${PAL.mint}, ${PAL.mintDeep})`, display: "grid", placeItems: "center", fontWeight: 700, color: PAL.onMint, fontSize: 18, boxShadow: "0 5px 14px rgba(18,184,146,.3)", flex: "none" }}>М</div>
+          <div style={{ lineHeight: 1.25 }}>
+            <div style={{ fontWeight: 650, fontSize: 18, letterSpacing: -0.4 }}>Мята — админ</div>
+            <div style={{ fontSize: 12.5, color: PAL.mute, fontWeight: 500 }}>{DAYS_RU[(TODAY.getDay() + 6) % 7]}, {fmtShort(TODAY)}</div>
           </div>
         </div>
         <div className="flex items-center gap-2">
         <button onClick={() => setDark((d) => !d)} title="Переключить тему" aria-label="Переключить тему"
-          style={{ width: 40, height: 40, borderRadius: 12, border: `1px solid ${PAL.line}`, background: PAL.white, cursor: "pointer", fontSize: 18, display: "grid", placeItems: "center" }}>
-          {dark ? "☀️" : "🌙"}
+          className="glass" style={{ width: 42, height: 42, borderRadius: 14, cursor: "pointer", fontSize: 17, display: "grid", placeItems: "center", color: PAL.ink }}>
+          {dark ? "☀" : "☾"}
         </button>
-        <nav style={{ display: "flex", background: PAL.white, border: `1px solid ${PAL.line}`, borderRadius: 12, padding: 4, gap: 4 }}>
+        <nav className="glass" style={{ display: "flex", borderRadius: 15, padding: 4, gap: 4 }}>
           {[["tobacco", "Табак"], ["staff", "Смены"]].map(([k, l]) => (
             <button key={k} onClick={() => setView(k)}
-              style={{ border: "none", borderRadius: 9, padding: "8px 18px", fontWeight: 700, fontSize: 14, cursor: "pointer", fontFamily: "inherit", background: view === k ? PAL.panel : "transparent", color: view === k ? PAL.panelText : PAL.mute }}>
+              style={{ border: view === k ? "1px solid rgba(255,255,255,.28)" : "1px solid transparent", borderRadius: 11, padding: "8px 20px", fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "inherit",
+                background: view === k ? `linear-gradient(180deg, ${PAL.mint}, ${PAL.mintDeep})` : "transparent",
+                color: view === k ? PAL.onMint : PAL.mute,
+                boxShadow: view === k ? "0 4px 12px rgba(18,184,146,.26), inset 0 1px 0 rgba(255,255,255,.4)" : "none" }}>
               {l}
             </button>
           ))}
@@ -217,7 +292,7 @@ export default function HookahAdmin() {
         </div>
       </header>
 
-      <main style={{ padding: "8px 24px 40px", maxWidth: 1240, margin: "0 auto" }}>
+      <main style={{ padding: "18px 24px 48px", maxWidth: 1280, margin: "0 auto" }}>
         {view === "tobacco"
           ? <TobaccoView setToast={setToast} ledger={ledger} setLedger={setLedger} daily={daily} inventories={inventories} setInventories={setInventories} />
           : <StaffView employees={employees} setEmployees={setEmployees} shifts={shifts} setShifts={setShifts} setToast={setToast}
@@ -225,7 +300,7 @@ export default function HookahAdmin() {
       </main>
 
       {toast && (
-        <div style={{ position: "fixed", bottom: 22, left: "50%", transform: "translateX(-50%)", background: PAL.panel, color: PAL.panelText, padding: "10px 18px", borderRadius: 12, fontWeight: 600, fontSize: 14, boxShadow: "0 8px 30px rgba(14,47,43,.25)" }}>{toast}</div>
+        <div style={{ position: "fixed", bottom: 26, left: "50%", transform: "translateX(-50%)", background: PAL.solid, color: PAL.panelText, padding: "11px 20px", borderRadius: 999, fontWeight: 600, fontSize: 14, boxShadow: "0 12px 40px rgba(0,0,0,.3)", border: "1px solid rgba(255,255,255,.12)", zIndex: 50 }}>{toast}</div>
       )}
     </div>
   );
@@ -307,8 +382,8 @@ function DayTotals({ rec, onSave, setToast, compact }) {
   };
   if (filled && !edit) return (
     <div className="flex items-center gap-4 flex-wrap">
-      <div><div style={{ fontSize: 11, color: PAL.mute }}>касса за день</div><div style={{ fontSize: compact ? 18 : 30, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(rec.cash)}</div></div>
-      <div><div style={{ fontSize: 11, color: PAL.mute }}>кальянов</div><div style={{ fontSize: compact ? 18 : 30, fontWeight: 800 }}>{rec.hookahs}</div></div>
+      <div><div style={{ fontSize: 11, color: PAL.mute }}>касса за день</div><div style={{ fontSize: compact ? 18 : 30, fontWeight: 700, color: PAL.mintDeep }}>{fmtMoney(rec.cash)}</div></div>
+      <div><div style={{ fontSize: 11, color: PAL.mute }}>кальянов</div><div style={{ fontSize: compact ? 18 : 30, fontWeight: 700 }}>{rec.hookahs}</div></div>
       <div style={{ marginLeft: "auto" }}><Btn small tone="ghost" onClick={() => setEdit(true)}>Изменить</Btn></div>
     </div>
   );
@@ -316,11 +391,11 @@ function DayTotals({ rec, onSave, setToast, compact }) {
     <div className="flex items-end gap-2 flex-wrap">
       <label style={{ flex: "1 1 130px" }}>
         <div style={{ fontSize: 11, color: PAL.mute, marginBottom: 3 }}>общая касса, ₽</div>
-        <input type="number" inputMode="numeric" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="0" style={{ ...STY.input, fontWeight: 800 }} />
+        <input type="number" inputMode="numeric" value={cash} onChange={(e) => setCash(e.target.value)} placeholder="0" style={{ ...STY.input, fontWeight: 700 }} />
       </label>
       <label style={{ flex: "1 1 100px" }}>
         <div style={{ fontSize: 11, color: PAL.mute, marginBottom: 3 }}>кальянов всего</div>
-        <input type="number" inputMode="numeric" value={hk} onChange={(e) => setHk(e.target.value)} placeholder="0" style={{ ...STY.input, fontWeight: 800 }} />
+        <input type="number" inputMode="numeric" value={hk} onChange={(e) => setHk(e.target.value)} placeholder="0" style={{ ...STY.input, fontWeight: 700 }} />
       </label>
       <Btn small={compact} onClick={save}>Сохранить</Btn>
       {filled && <Btn small={compact} tone="ghost" onClick={() => setEdit(false)}>Отмена</Btn>}
@@ -331,10 +406,10 @@ function DayTotals({ rec, onSave, setToast, compact }) {
 // ---------- выбор сотрудника на смену ----------
 function ShiftPick({ day, kind, emp, employees, onEmp }) {
   return (
-    <div style={{ background: PAL.white, border: `1px solid ${PAL.line}`, borderRadius: 14, padding: 12, flex: "1 1 220px" }}>
+    <div className="glass2" style={{ border: `1px solid ${PAL.line}`, borderRadius: 16, padding: 14, flex: "1 1 220px" }}>
       <div className="flex items-center justify-between gap-2 mb-2">
         <div>
-          <div style={{ fontWeight: 800, fontSize: 15 }}>{SHIFT_LABEL[kind]}</div>
+          <div style={{ fontWeight: 700, fontSize: 15 }}>{SHIFT_LABEL[kind]}</div>
           <div style={{ fontSize: 12, color: PAL.mute }}>{shiftHoursOf(kind, new Date(day + "T12:00:00"))}</div>
         </div>
         {emp && <span style={{ width: 10, height: 10, borderRadius: 5, background: emp.color || PAL.mint }} />}
@@ -404,8 +479,19 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
     return out;
   }, [daily, shifts, employees]);
 
-  const month = TODAY.getMonth(), year = TODAY.getFullYear();
+  const [monthOffset, setMonthOffset] = useState(0);
+  const viewMonth = new Date(TODAY.getFullYear(), TODAY.getMonth() + monthOffset, 1);
+  const month = viewMonth.getMonth(), year = viewMonth.getFullYear();
+  const monthTitle = `${MONTHS_RU[month]} ${year !== TODAY.getFullYear() ? year : ""}`.trim();
   const inMonth = (day) => { const d = new Date(day + "T12:00:00"); return d.getMonth() === month && d.getFullYear() === year; };
+  const MonthPick = (
+    <div className="flex items-center gap-1">
+      <Btn small tone="ghost" onClick={() => setMonthOffset((m) => m - 1)}>←</Btn>
+      <span style={{ fontSize: 13, fontWeight: 700, minWidth: 86, textAlign: "center" }}>{monthTitle}</span>
+      <Btn small tone="ghost" onClick={() => setMonthOffset((m) => m + 1)} disabled={monthOffset >= 0}>→</Btn>
+      {monthOffset !== 0 && <Btn small tone="ghost" onClick={() => setMonthOffset(0)}>текущий</Btn>}
+    </div>
+  );
 
   // зарплата: касса дня делится поровну между сотрудниками этого дня
   const salary = employees.map((e) => {
@@ -449,8 +535,8 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
   };
 
   const isToday = (d) => iso(d) === today;
-  const th = { padding: "8px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap" };
-  const td = { padding: "8px", borderTop: `1px solid ${PAL.line}`, fontSize: 13 };
+  const th = { padding: "8px 10px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap", lineHeight: 1.3 };
+  const td = { padding: "10px", borderTop: `1px solid ${PAL.line}`, fontSize: 13.5, lineHeight: 1.35, verticalAlign: "middle" };
   const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
 
   return (
@@ -467,10 +553,10 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
         {/* заявки от сотрудников */}
         {pendingReqs.length > 0 && (
           <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 14, background: PAL.lowBg, border: `1px solid ${PAL.line}` }}>
-            <div style={{ fontWeight: 800, fontSize: 14, marginBottom: 6 }}>Ждут одобрения на смену · {pendingReqs.length}</div>
+            <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Ждут одобрения на смену · {pendingReqs.length}</div>
             <div className="flex flex-col gap-2">
               {pendingReqs.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 flex-wrap" style={{ background: PAL.white, borderRadius: 10, padding: "8px 10px" }}>
+                <div key={r.id} className="flex items-center gap-2 flex-wrap" className="glass2" style={{ borderRadius: 12, padding: "10px 12px", border: `1px solid ${PAL.line}` }}>
                   <b style={{ fontSize: 14 }}>{r.name}</b>
                   <span style={{ fontSize: 13, color: PAL.mute }}>
                     {(r.items || []).map((i) => `${fmtShort(new Date(i.day + "T12:00:00"))} · ${SHIFT_LABEL[i.kind]}`).join(", ")}
@@ -485,7 +571,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
           </div>
         )}
 
-        <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 14, background: PAL.paper, border: `1px solid ${PAL.line}` }}>
+        <div className="glass2" style={{ marginTop: 14, padding: "14px 16px", borderRadius: 16, border: `1px solid ${PAL.line}` }}>
           <DayTotals rec={totalOf(today)} setToast={setToast} onSave={(rec) => setTotals(today, rec)} />
           {totalOf(today) && (
             <div style={{ marginTop: 8 }}>
@@ -530,7 +616,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
             <div />
             {days.map((d, i) => (
               <div key={i} style={{ textAlign: "center", padding: "6px 0", borderRadius: 10, background: isToday(d) ? PAL.panel : "transparent", color: isToday(d) ? PAL.panelText : PAL.ink }}>
-                <div style={{ fontWeight: 800, fontSize: 15 }}>{DAYS_RU[i]}</div>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>{DAYS_RU[i]}</div>
                 <div style={{ fontSize: 12, color: isToday(d) ? PAL.panelSoft : PAL.mute }}>{fmtShort(d)}</div>
               </div>
             ))}
@@ -543,8 +629,8 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
                 {days.map((d) => {
                   const key = dkey(iso(d), kind); const e = empById[shifts[key]]; const dayRec = totalOf(iso(d));
                   return (
-                    <div key={key} style={{ borderRadius: 12, padding: 6, background: e ? (e.color || PAL.mint) + "22" : PAL.paper, border: `1.5px ${e ? "solid " + (e.color || PAL.mint) : "dashed " + PAL.line}`, minHeight: 58, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
-                      {e && <div style={{ fontWeight: 800, fontSize: 14, textAlign: "center" }}>{e.name}</div>}
+                    <div key={key} style={{ borderRadius: 14, padding: 7, background: e ? (e.color || PAL.mint) + "1F" : PAL.paper, border: `1px ${e ? "solid " + (e.color || PAL.mint) + "66" : "dashed " + PAL.line}`, minHeight: 58, display: "flex", flexDirection: "column", justifyContent: "center", gap: 4 }}>
+                      {e && <div style={{ fontWeight: 700, fontSize: 14, textAlign: "center" }}>{e.name}</div>}
                       {kind === "day" && dayRec ? <div style={{ fontSize: 11, textAlign: "center", color: PAL.mintDeep, fontWeight: 700 }}>{fmtMoney(dayRec.cash)} · {dayRec.hookahs} шт</div> : null}
                       <select value={shifts[key] || ""} onChange={(ev) => setCell(iso(d), kind, ev.target.value)}
                         style={{ ...STY.input, padding: "4px 6px", fontSize: 12, background: PAL.cellBg, border: "none", textAlign: "center", color: e ? PAL.mute : PAL.ink }}>
@@ -598,7 +684,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
                       </td>
                     ) : r.filled ? (
                       <>
-                        <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(r.cash)}</td>
+                        <td style={{ ...num, fontWeight: 700, color: PAL.mintDeep }}>{fmtMoney(r.cash)}</td>
                         <td style={{ ...num, fontWeight: 700 }}>{r.hookahs}</td>
                         <td style={{ ...num, color: PAL.lilac, fontWeight: 700 }}>{fmtMoney(r.pool)}</td>
                         <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
@@ -668,8 +754,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
         )}
       </Card>
 
-      <Card style={{ gridColumn: "span 12" }} title={`Итоги за ${MONTHS_RU[month]} — заработок сотрудников`}
-        aside={<span style={{ fontSize: 12, color: PAL.mute }}>касса делится поровну между сотрудниками смены</span>}>
+      <Card style={{ gridColumn: "span 12" }} title={`Итоги за ${monthTitle} — заработок сотрудников`} aside={MonthPick}>
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
             <thead><tr>
@@ -690,18 +775,18 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
                   <td style={num}>{s.кальянов}</td>
                   <td style={num}>{s.среднее}</td>
                   <td style={{ ...num, color: PAL.mute }}>{s.rate}%</td>
-                  <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep, fontSize: 15 }}>{fmtMoney(s.зп)}</td>
+                  <td style={{ ...num, fontWeight: 700, color: PAL.mintDeep, fontSize: 15 }}>{fmtMoney(s.зп)}</td>
                 </tr>
               ))}
               {salary.length > 0 && (
                 <tr style={{ background: PAL.mintPale }}>
-                  <td style={{ ...td, fontWeight: 800 }}>Итого</td>
+                  <td style={{ ...td, fontWeight: 700 }}>Итого</td>
                   <td style={{ ...num, fontWeight: 700 }}>{salary.reduce((a, s) => a + s.смен, 0)}</td>
                   <td style={{ ...num, fontWeight: 700 }}>{fmtMoney(salary.reduce((a, s) => a + s.касса, 0))}</td>
                   <td style={{ ...num, fontWeight: 700 }}>{salary.reduce((a, s) => a + s.кальянов, 0)}</td>
                   <td style={num} />
                   <td style={num} />
-                  <td style={{ ...num, fontWeight: 800, color: PAL.lilac }}>{fmtMoney(salary.reduce((a, s) => a + s.зп, 0))}</td>
+                  <td style={{ ...num, fontWeight: 700, color: PAL.lilac }}>{fmtMoney(salary.reduce((a, s) => a + s.зп, 0))}</td>
                 </tr>
               )}
             </tbody>
@@ -709,15 +794,15 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
         </div>
       </Card>
 
-      <MonthShifts employees={employees} shifts={shifts} monday={monday} />
+      <MonthShifts employees={employees} shifts={shifts} viewMonth={viewMonth} title={monthTitle} pick={MonthPick} />
     </div>
   );
 }
 
 // ---------- нижний блок: смены за месяц ----------
-function MonthShifts({ employees, shifts, monday }) {
+function MonthShifts({ employees, shifts, viewMonth, title, pick }) {
   const monthStats = useMemo(() => {
-    const y = monday.getFullYear(), m = monday.getMonth();
+    const y = viewMonth.getFullYear(), m = viewMonth.getMonth();
     return employees.map((e) => {
       let day = 0, night = 0;
       Object.entries(shifts).forEach(([k, v]) => {
@@ -727,10 +812,10 @@ function MonthShifts({ employees, shifts, monday }) {
       });
       return { name: e.name, день: day, ночь: night };
     });
-  }, [employees, shifts, monday]);
+  }, [employees, shifts, viewMonth]);
 
   return (
-    <Card title={`Смены за ${MONTHS_RU[monday.getMonth()]} — 1-я и 2-я`} style={{ gridColumn: "span 12" }}>
+    <Card title={`Смены за ${title} — 1-я и 2-я`} style={{ gridColumn: "span 12" }} aside={pick}>
       <ResponsiveContainer width="100%" height={220}>
         <BarChart data={monthStats} margin={{ left: -10, right: 10, top: 16 }}>
           <CartesianGrid vertical={false} stroke={PAL.line} />
@@ -775,7 +860,7 @@ function QtyTable({ q, onChange, color }) {
         <div key={k} className="flex items-center gap-2">
           <div style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{name}<span style={{ fontWeight: 600, fontSize: 12, color: PAL.mute }}> · {g} г</span></div>
           <input type="number" min={0} value={q[k] ?? ""} placeholder="0" onChange={(e) => onChange({ ...q, [k]: e.target.value })}
-            style={{ ...STY.input, width: 84, textAlign: "center", fontWeight: 800 }} />
+            style={{ ...STY.input, width: 84, textAlign: "center", fontWeight: 700 }} />
           <div style={{ width: 76, textAlign: "right", fontSize: 13, color: (Number(q[k]) || 0) ? color : PAL.mute, fontWeight: 700 }}>
             {(Number(q[k]) || 0) * g || 0} г
           </div>
@@ -943,25 +1028,25 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
   const startEdit = (l) => { setEditRow(l.id); setEditVals({ grams: l.grams, note: l.note || "" }); };
   const saveEdit = () => { patch(editRow, { grams: Math.round(Number(editVals.grams) || 0), note: editVals.note }); setEditRow(null); setToast("Строка изменена"); };
 
-  const th = { padding: "8px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap" };
-  const td = { padding: "9px 8px", borderTop: `1px solid ${PAL.line}`, fontSize: 14, verticalAlign: "middle" };
+  const th = { padding: "8px 10px", fontWeight: 600, fontSize: 12, color: PAL.mute, textAlign: "left", whiteSpace: "nowrap", lineHeight: 1.3 };
+  const td = { padding: "11px 10px", borderTop: `1px solid ${PAL.line}`, fontSize: 14, lineHeight: 1.35, verticalAlign: "middle" };
   const num = { ...td, textAlign: "right", fontVariantNumeric: "tabular-nums" };
   const label = { fontSize: 11, color: PAL.mute, marginBottom: 3 };
 
   return (
     <div className="grid gap-4" style={{ gridTemplateColumns: "repeat(12, minmax(0, 1fr))" }}>
       {/* ---------- расчётный остаток ---------- */}
-      <section style={{ gridColumn: "span 7", background: PAL.panel, color: PAL.panelText, borderRadius: 22, padding: "20px 22px" }}>
+      <section className="glass" style={{ gridColumn: "span 7", background: PAL.solid, color: PAL.panelText, borderRadius: 22, padding: "22px 24px", border: "1px solid rgba(255,255,255,.1)" }}>
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
             <div style={{ fontSize: 13, color: PAL.panelSoft }}>Расчётный остаток на складе</div>
-            <div style={{ fontSize: 48, fontWeight: 800, letterSpacing: -2, lineHeight: 1.1, color: PAL.mint }}>
+            <div style={{ fontSize: 52, fontWeight: 700, letterSpacing: -2.2, lineHeight: 1.05, color: PAL.mint, marginTop: 2 }}>
               {stock.toLocaleString("ru-RU")} <span style={{ fontSize: 20, color: PAL.panelSoft, letterSpacing: 0 }}>г</span>
             </div>
           </div>
           <div className="flex gap-1">
             {[7, 14, 30].map((n) => (
-              <button key={n} onClick={() => setRange(n)} style={{ border: "none", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: range === n ? PAL.mint : "rgba(255,255,255,.12)", color: range === n ? PAL.ink : PAL.panelText }}>{n} дн.</button>
+              <button key={n} onClick={() => setRange(n)} style={{ border: "none", borderRadius: 8, padding: "5px 10px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: range === n ? PAL.mint : "rgba(255,255,255,.1)", color: range === n ? PAL.onMint : PAL.panelText, border: "1px solid rgba(255,255,255,.14)" }}>{n} дн.</button>
             ))}
           </div>
         </div>
@@ -1034,18 +1119,18 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
             <div className="flex gap-2 mb-3">
               {Object.entries(INV_KIND).map(([k, l]) => (
                 <button key={k} onClick={() => setInvKind(k)}
-                  style={{ flex: 1, border: `2px solid ${invKind === k ? PAL.mint : PAL.line}`, background: invKind === k ? PAL.mintPale : PAL.white, color: PAL.ink, borderRadius: 12, padding: "10px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>{l}</button>
+                  style={{ flex: 1, border: `1px solid ${invKind === k ? PAL.mint : PAL.line}`, background: invKind === k ? PAL.mintPale : PAL.white, color: PAL.ink, borderRadius: 13, padding: "11px", fontWeight: 600, fontSize: 14, cursor: "pointer", fontFamily: "inherit", boxShadow: invKind === k ? "0 3px 12px rgba(18,184,146,.16)" : "none" }}>{l}</button>
               ))}
             </div>
             <div style={label}>Фактический остаток, г</div>
             <div className="flex gap-2">
               <input type="number" value={invActual} placeholder={String(stock)} onChange={(e) => { setInvActual(e.target.value); setInvChecked(true); }}
-                style={{ ...STY.input, fontSize: 22, fontWeight: 800 }} />
+                style={{ ...STY.input, fontSize: 22, fontWeight: 700 }} />
             </div>
 
             {invDiff !== null && invChecked && (
               <div style={{ marginTop: 10, padding: "10px 12px", borderRadius: 12, background: invBig ? PAL.lowBg : PAL.mintPale }}>
-                <div style={{ fontWeight: 800, color: invBig ? PAL.coral : PAL.mintDeep }}>
+                <div style={{ fontWeight: 700, color: invBig ? PAL.coral : PAL.mintDeep }}>
                   {invBig ? "Необходимо пересчитать" : "Нормальное отклонение"}
                 </div>
                 <div style={{ fontSize: 13, color: PAL.mute, marginTop: 2 }}>
@@ -1068,7 +1153,7 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
         aside={<span style={{ fontSize: 12, color: PAL.mute }}>минус — убрать</span>}>
         <div style={label}>Граммы: 500 добавит, −500 уберёт</div>
         <input value={corr.grams} placeholder="например −250" onChange={(e) => setCorr({ ...corr, grams: e.target.value })}
-          style={{ ...STY.input, fontSize: 22, fontWeight: 800, color: corrG < 0 ? PAL.coral : PAL.ink }} />
+          style={{ ...STY.input, fontSize: 22, fontWeight: 700, color: corrG < 0 ? PAL.coral : PAL.ink }} />
         <div style={{ ...label, marginTop: 10 }}>Комментарий — почему</div>
         <input value={corr.note} placeholder="например: просыпали при забивке" onChange={(e) => setCorr({ ...corr, note: e.target.value })} style={STY.input} />
         <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
@@ -1079,7 +1164,7 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
 
       {/* ---------- продажи ---------- */}
       <Card style={{ gridColumn: "span 4" }} title="Продажи кальянов">
-        <div style={{ fontSize: 12, color: PAL.mute, marginBottom: 8, padding: "6px 10px", borderRadius: 8, background: PAL.paper }}>
+        <div style={{ fontSize: 12, color: PAL.mute, marginBottom: 8, padding: "7px 11px", borderRadius: 10, background: PAL.paper, border: `1px solid ${PAL.line}` }}>
           {lastSale
             ? <>последние продажи внесены за <b style={{ color: PAL.ink }}>{periodNote({ from: lastSale.from, to: lastSale.to })}</b></>
             : "продажи ещё не вносились"}
@@ -1110,7 +1195,7 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
         <div className="flex gap-2">
           {[["перезабивка", "Перезабивка"], ["своя", "Своя причина"]].map(([k, l]) => (
             <button key={k} onClick={() => setWoReason(k)}
-              style={{ flex: 1, border: `2px solid ${woReason === k ? PAL.sun : PAL.line}`, background: woReason === k ? PAL.sun + "22" : PAL.white, color: PAL.ink, borderRadius: 10, padding: "8px", fontWeight: 700, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{l}</button>
+              style={{ flex: 1, border: `1px solid ${woReason === k ? PAL.sun : PAL.line}`, background: woReason === k ? PAL.sun + "1F" : PAL.white, color: PAL.ink, borderRadius: 11, padding: "9px", fontWeight: 600, fontSize: 13, cursor: "pointer", fontFamily: "inherit" }}>{l}</button>
           ))}
         </div>
         {woReason === "своя" && <input value={woOwn} placeholder="напиши причину" onChange={(e) => setWoOwn(e.target.value)} style={{ ...STY.input, marginTop: 8 }} />}
@@ -1125,7 +1210,7 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
         aside={
           <div className="flex gap-1">
             {[["add", "Поставка — добавить"], ["replace", "Инвентаризация — заменить"]].map(([k, l]) => (
-              <button key={k} onClick={() => setFileMode(k)} style={{ border: "none", borderRadius: 8, padding: "5px 12px", fontSize: 12, fontWeight: 700, cursor: "pointer", fontFamily: "inherit", background: fileMode === k ? PAL.panel : PAL.paper, color: fileMode === k ? PAL.panelText : PAL.mute }}>{l}</button>
+              <button key={k} onClick={() => setFileMode(k)} style={{ border: fileMode === k ? `1px solid ${PAL.line}` : "1px solid transparent", borderRadius: 10, padding: "6px 14px", fontSize: 12.5, fontWeight: 600, cursor: "pointer", fontFamily: "inherit", background: fileMode === k ? PAL.white : "transparent", color: fileMode === k ? PAL.ink : PAL.mute, boxShadow: fileMode === k ? "0 2px 8px rgba(0,0,0,.08)" : "none" }}>{l}</button>
             ))}
           </div>
         }>
@@ -1154,8 +1239,8 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
             )}
 
             {confirmFile && (
-              <div style={{ marginTop: 10, padding: "12px 14px", borderRadius: 12, background: PAL.white, border: `2px solid ${PAL.mint}` }}>
-                <div style={{ fontWeight: 800, fontSize: 15 }}>Подтверди операцию</div>
+              <div className="glass2" style={{ marginTop: 10, padding: "14px 16px", borderRadius: 16, border: `1px solid ${PAL.mint}` }}>
+                <div style={{ fontWeight: 700, fontSize: 15 }}>Подтверди операцию</div>
                 <div style={{ fontSize: 14, marginTop: 6 }}>
                   {fileMode === "add"
                     ? <>Поступило <b>{foundTotal} г</b>. Остаток станет <b style={{ color: PAL.mintDeep }}>{stock + foundTotal} г</b> (сейчас {stock} г).</>
@@ -1208,7 +1293,7 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
                       {editing ? <input value={editVals.note} onChange={(e) => setEditVals({ ...editVals, note: e.target.value })} style={{ ...STY.input, padding: "4px 8px" }} /> : l.note}
                     </td>
                     <td style={num}>{l.qty || "—"}</td>
-                    <td style={{ ...num, fontWeight: 800, color: l.grams > 0 ? PAL.mintDeep : PAL.coral }}>
+                    <td style={{ ...num, fontWeight: 700, color: l.grams > 0 ? PAL.mintDeep : PAL.coral }}>
                       {editing
                         ? <input type="number" value={editVals.grams} onChange={(e) => setEditVals({ ...editVals, grams: e.target.value })} style={{ ...STY.input, width: 90, padding: "4px 8px", textAlign: "right", fontWeight: 700 }} />
                         : <>{l.grams > 0 ? "+" : ""}{l.grams}</>}
