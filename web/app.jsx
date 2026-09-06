@@ -384,6 +384,11 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
     delete n[dkey(day, "day")]; delete n[dkey(day, "night")];
     return n;
   });
+  const clearTotals = (day) => setDaily((d) => {
+    const n = { ...d };
+    delete n[dkey(day, "all")]; delete n[dkey(day, "day")]; delete n[dkey(day, "night")];
+    return n;
+  });
   const empsOf = (day) => ["day", "night"].map((k) => empById[shifts[dkey(day, k)]]).filter(Boolean);
 
   // дни за последние 45 дней, где есть смены или касса
@@ -431,6 +436,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
 
   const monthTot = byDay.filter((r) => inMonth(r.day)).reduce((a, r) => ({ cash: a.cash + r.cash, hk: a.hk + r.hookahs }), { cash: 0, hk: 0 });
   const [editDay, setEditDay] = useState(null);
+  const [askDel, setAskDel] = useState(null);
   const pendingReqs = (requests || []).filter((r) => r.status === "new");
   const decideReq = (r, ok) => {
     if (ok) setShifts((sh) => {
@@ -481,6 +487,14 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
 
         <div style={{ marginTop: 14, padding: "12px 14px", borderRadius: 14, background: PAL.paper, border: `1px solid ${PAL.line}` }}>
           <DayTotals rec={totalOf(today)} setToast={setToast} onSave={(rec) => setTotals(today, rec)} />
+          {totalOf(today) && (
+            <div style={{ marginTop: 8 }}>
+              <button onClick={() => { clearTotals(today); setToast("Касса за сегодня удалена"); }}
+                style={{ border: "none", background: "transparent", color: PAL.coral, cursor: "pointer", fontFamily: "inherit", fontSize: 12, fontWeight: 600, padding: 0 }}>
+                Удалить кассу за сегодня
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex gap-2 flex-wrap" style={{ marginTop: 12 }}>
@@ -587,7 +601,14 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
                         <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(r.cash)}</td>
                         <td style={{ ...num, fontWeight: 700 }}>{r.hookahs}</td>
                         <td style={{ ...num, color: PAL.lilac, fontWeight: 700 }}>{fmtMoney(r.pool)}</td>
-                        <td style={{ ...td, textAlign: "right" }}><Btn small tone="ghost" onClick={() => setEditDay(r.day)}>Изменить</Btn></td>
+                        <td style={{ ...td, textAlign: "right", whiteSpace: "nowrap" }}>
+                          <span className="flex gap-1 justify-end">
+                            <Btn small tone="ghost" onClick={() => setEditDay(r.day)}>Изменить</Btn>
+                            <Btn small tone="coral" onClick={() => { if (askDel === r.day) { clearTotals(r.day); setAskDel(null); setToast("Касса за день удалена"); } else setAskDel(r.day); }}>
+                              {askDel === r.day ? "Точно?" : "×"}
+                            </Btn>
+                          </span>
+                        </td>
                       </>
                     ) : (
                       <>
