@@ -19,12 +19,12 @@ const api = async (method, url, body) => {
 const LIGHT = {
   ink: "#0E2F2B", mint: "#19C39A", mintDeep: "#0F8F70", mintPale: "#DDF7EF",
   paper: "#F4FBF8", white: "#FFFFFF", coral: "#F2634A", sun: "#F5B841", sky: "#3A8DFF", lilac: "#8E6CF2",
-  mute: "#6B8A84", line: "#D5EAE3", panel: "#0E2F2B", panelText: "#FFFFFF", lowBg: "#FFF3F0", cellBg: "rgba(255,255,255,.7)",
+  mute: "#6B8A84", line: "#D5EAE3", panel: "#0E2F2B", panelText: "#FFFFFF", panelSoft: "#B7E8D8", lowBg: "#FFF3F0", cellBg: "rgba(255,255,255,.7)",
 };
 const DARK = {
   ink: "#E6F4EF", mint: "#2BD7AB", mintDeep: "#5FE3C0", mintPale: "#173A33",
-  paper: "#0B1613", white: "#132621", coral: "#FF7A62", sun: "#FFC857", sky: "#5CA3FF", lilac: "#A98CFF",
-  mute: "#7FA39B", line: "#1F3A34", panel: "#061B17", panelText: "#E6F4EF", lowBg: "#3A1F1A", cellBg: "rgba(0,0,0,.25)",
+  paper: "#0C1A16", white: "#162924", coral: "#FF7A62", sun: "#FFC857", sky: "#5CA3FF", lilac: "#A98CFF",
+  mute: "#9CC2B9", line: "#27453E", panel: "#0C2B24", panelText: "#EAF7F2", panelSoft: "#8FD9C2", lowBg: "#402A24", cellBg: "rgba(255,255,255,.06)",
 };
 const PAL = { ...LIGHT };
 const BRAND_COLORS = [PAL.mint, PAL.sky, PAL.lilac, PAL.sun, PAL.coral, "#2FB3C6", "#E058A8"];
@@ -405,9 +405,16 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
   // зарплата: касса дня делится поровну между сотрудниками этого дня
   const salary = employees.map((e) => {
     const mine = dayList.filter((r) => inMonth(r.day) && r.emps.some((x) => x.id === e.id));
-    const base = mine.reduce((a, r) => a + (r.emps.length ? r.cash / r.emps.length : 0), 0);
+    const withCash = mine.filter((r) => r.filled);
+    const base = withCash.reduce((a, r) => a + r.cash / r.emps.length, 0);
+    const hk = withCash.reduce((a, r) => a + r.hookahs / r.emps.length, 0);
     const rate = Number(e.rate) || 0;
-    return { id: e.id, name: e.name, color: e.color, rate, смен: mine.length, касса: Math.round(base), зп: Math.round(base * rate / 100) };
+    return {
+      id: e.id, name: e.name, color: e.color, rate,
+      смен: mine.length, касса: Math.round(base), кальянов: Math.round(hk),
+      среднее: withCash.length ? Math.round(hk / withCash.length) : 0,
+      зп: Math.round(base * rate / 100),
+    };
   });
 
   const perf = employees.map((e) => {
@@ -510,7 +517,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
             {days.map((d, i) => (
               <div key={i} style={{ textAlign: "center", padding: "6px 0", borderRadius: 10, background: isToday(d) ? PAL.panel : "transparent", color: isToday(d) ? PAL.panelText : PAL.ink }}>
                 <div style={{ fontWeight: 800, fontSize: 15 }}>{DAYS_RU[i]}</div>
-                <div style={{ fontSize: 12, color: isToday(d) ? PAL.mintPale : PAL.mute }}>{fmtShort(d)}</div>
+                <div style={{ fontSize: 12, color: isToday(d) ? PAL.panelSoft : PAL.mute }}>{fmtShort(d)}</div>
               </div>
             ))}
             {SHIFTS.map(([kind, label]) => (
@@ -600,8 +607,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
         <div style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 520 }}>
             <thead><tr>
-              <th style={th}>Сотрудник</th><th style={{ ...th, textAlign: "right" }}>%</th>
-              <th style={{ ...th, textAlign: "right" }}>Смен</th><th style={{ ...th, textAlign: "right" }}>Касса</th><th style={{ ...th, textAlign: "right" }}>ЗП</th><th style={th} />
+              <th style={th}>Сотрудник</th><th style={{ ...th, textAlign: "right" }}>Мотивация, %</th><th style={th} />
             </tr></thead>
             <tbody>
               {salary.map((s) => (
@@ -612,10 +618,7 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
                       <input value={s.name} onChange={(e) => patchEmp(s.id, { name: e.target.value })} style={{ ...STY.input, fontWeight: 600, padding: "4px 8px" }} />
                     </div>
                   </td>
-                  <td style={num}><input type="number" value={s.rate} onChange={(e) => patchEmp(s.id, { rate: Number(e.target.value) || 0 })} style={{ ...STY.input, width: 62, padding: "4px 6px", textAlign: "right" }} /></td>
-                  <td style={num}>{s.смен}</td>
-                  <td style={{ ...num, color: PAL.mute }}>{fmtMoney(s.касса)}</td>
-                  <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep }}>{fmtMoney(s.зп)}</td>
+                  <td style={num}><input type="number" value={s.rate} onChange={(e) => patchEmp(s.id, { rate: Number(e.target.value) || 0 })} style={{ ...STY.input, width: 70, padding: "4px 6px", textAlign: "right" }} /></td>
                   <td style={{ ...td, textAlign: "right" }}><Btn small tone="coral" onClick={() => removeEmployee(s.id)}>×</Btn></td>
                 </tr>
               ))}
@@ -642,6 +645,47 @@ function StaffView({ employees, setEmployees, shifts, setShifts, setToast, daily
             </BarChart>
           </ResponsiveContainer>
         )}
+      </Card>
+
+      <Card style={{ gridColumn: "span 12" }} title={`Итоги за ${MONTHS_RU[month]} — заработок сотрудников`}
+        aside={<span style={{ fontSize: 12, color: PAL.mute }}>касса делится поровну между сотрудниками смены</span>}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 700 }}>
+            <thead><tr>
+              <th style={th}>Сотрудник</th>
+              <th style={{ ...th, textAlign: "right" }}>Смен</th>
+              <th style={{ ...th, textAlign: "right" }}>Касса</th>
+              <th style={{ ...th, textAlign: "right" }}>Кальянов</th>
+              <th style={{ ...th, textAlign: "right" }}>В среднем за смену</th>
+              <th style={{ ...th, textAlign: "right" }}>%</th>
+              <th style={{ ...th, textAlign: "right" }}>Заработал</th>
+            </tr></thead>
+            <tbody>
+              {salary.map((s) => (
+                <tr key={s.id}>
+                  <td style={td}><span className="flex items-center gap-2"><span style={{ width: 10, height: 10, borderRadius: 5, background: s.color || PAL.mint }} /><b>{s.name}</b></span></td>
+                  <td style={num}>{s.смен}</td>
+                  <td style={{ ...num, color: PAL.mute }}>{fmtMoney(s.касса)}</td>
+                  <td style={num}>{s.кальянов}</td>
+                  <td style={num}>{s.среднее}</td>
+                  <td style={{ ...num, color: PAL.mute }}>{s.rate}%</td>
+                  <td style={{ ...num, fontWeight: 800, color: PAL.mintDeep, fontSize: 15 }}>{fmtMoney(s.зп)}</td>
+                </tr>
+              ))}
+              {salary.length > 0 && (
+                <tr style={{ background: PAL.mintPale }}>
+                  <td style={{ ...td, fontWeight: 800 }}>Итого</td>
+                  <td style={{ ...num, fontWeight: 700 }}>{salary.reduce((a, s) => a + s.смен, 0)}</td>
+                  <td style={{ ...num, fontWeight: 700 }}>{fmtMoney(salary.reduce((a, s) => a + s.касса, 0))}</td>
+                  <td style={{ ...num, fontWeight: 700 }}>{salary.reduce((a, s) => a + s.кальянов, 0)}</td>
+                  <td style={num} />
+                  <td style={num} />
+                  <td style={{ ...num, fontWeight: 800, color: PAL.lilac }}>{fmtMoney(salary.reduce((a, s) => a + s.зп, 0))}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </Card>
 
       <MonthShifts employees={employees} shifts={shifts} monday={monday} />
@@ -701,10 +745,10 @@ const bowlG = (k) => (BOWLS.find((b) => b[0] === k) || [, , 22])[2];
 const bowlName = (k) => (BOWLS.find((b) => b[0] === k) || [, "кальян"])[1];
 const INV_KIND = { mid: "Промежуточная", main: "Основная" };
 const DEVIATION = 800; // допустимое отклонение, г
+const GRAMS_PER_BOWL = 22; // средняя граммовка кальяна для прогноза
 
 function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInventories }) {
   const [range, setRange] = useState(14);
-  const [gramsPerBowl, setGramsPerBowl] = useState(22);
   const fileRef = useRef();
   const [busy, setBusy] = useState(false);
   const [found, setFound] = useState(null);
@@ -741,7 +785,7 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
     return ds.length ? ds.reduce((a, x) => a + x, 0) / ds.length : 0;
   }, [daily]);
 
-  const perDay = Math.round(avgHookahs * gramsPerBowl);
+  const perDay = Math.round(avgHookahs * GRAMS_PER_BOWL);
   const daysLeft = perDay > 0 ? Math.floor(stock / perDay) : null;
   const goneRange = chart.reduce((s, r) => s + r.ушло, 0);
 
@@ -769,16 +813,18 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
   };
 
   // ---------- ручная корректировка ----------
-  const [corr, setCorr] = useState({ dir: 1, grams: "", note: "" });
+  const [corr, setCorr] = useState({ grams: "", note: "" });
+  const corrG = Math.round(Number(String(corr.grams).replace(",", ".").replace("−", "-")) || 0);
   const doCorr = () => {
-    const g = Number(corr.grams); if (!(g > 0)) return;
-    add({ type: "adjust", grams: corr.dir * g, note: corr.note || (corr.dir > 0 ? "ручное добавление" : "ручное уменьшение") });
-    setToast(`${corr.dir > 0 ? "+" : "−"}${g} г`); setCorr({ dir: 1, grams: "", note: "" });
+    if (!corrG) return;
+    add({ type: "adjust", grams: corrG, note: corr.note || (corrG > 0 ? "ручное добавление" : "ручное уменьшение") });
+    setToast(`${corrG > 0 ? "+" : ""}${corrG} г`); setCorr({ grams: "", note: "" });
   };
 
   // ---------- продажи и списания за период ----------
   const today = iso(TODAY);
   const [salePeriod, setSalePeriod] = useState({ from: today, to: today });
+  const [saleTouched, setSaleTouched] = useState(false);
   const [saleQty, setSaleQty] = useState({});
   const [woPeriod, setWoPeriod] = useState({ from: today, to: today });
   const [woQty, setWoQty] = useState({});
@@ -791,13 +837,27 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
 
   const periodNote = (p) => (p.from === p.to ? fmtShort(new Date(p.from + "T12:00:00")) : `${fmtShort(new Date(p.from + "T12:00:00"))} — ${fmtShort(new Date(p.to + "T12:00:00"))}`);
 
+  // последний внесённый период продаж
+  const lastSale = useMemo(() => {
+    const withP = ledger.filter((l) => l.type === "sale" && l.pTo);
+    if (!withP.length) return null;
+    const to = withP.reduce((m, l) => (l.pTo > m ? l.pTo : m), withP[0].pTo);
+    const from = withP.filter((l) => l.pTo === to).reduce((m, l) => (l.pFrom < m ? l.pFrom : m), withP[0].pFrom);
+    return { from, to };
+  }, [ledger]);
+  useEffect(() => {
+    if (!lastSale || saleTouched) return;
+    const next = iso(addDays(new Date(lastSale.to + "T12:00:00"), 1));
+    setSalePeriod({ from: next, to: next > today ? next : today });
+  }, [lastSale?.to]);
+
   const doSales = () => {
     const entries = BOWLS.filter(([k]) => Number(saleQty[k]) > 0).map(([k, label, g]) => ({
       type: "sale", kind: k, qty: Number(saleQty[k]), grams: -Number(saleQty[k]) * g,
-      date: salePeriod.to, note: `${label} · ${periodNote(salePeriod)}`,
+      date: salePeriod.to, pFrom: salePeriod.from, pTo: salePeriod.to, note: `${label} · ${periodNote(salePeriod)}`,
     }));
     if (!entries.length) return;
-    addMany(entries); setSaleQty({}); setToast(`Продажи: ${qtyCount(saleQty)} шт, −${saleGrams} г`);
+    addMany(entries); setSaleQty({}); setSaleTouched(false); setToast(`Продажи: ${qtyCount(saleQty)} шт, −${saleGrams} г`);
   };
   const doWo = () => {
     const reason = woReason === "своя" ? (woOwn.trim() || "списание") : woReason;
@@ -871,9 +931,9 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
       <section style={{ gridColumn: "span 7", background: PAL.panel, color: PAL.panelText, borderRadius: 22, padding: "20px 22px" }}>
         <div className="flex items-baseline justify-between gap-3 flex-wrap">
           <div>
-            <div style={{ fontSize: 13, color: PAL.mintPale, opacity: .85 }}>Расчётный остаток на складе</div>
+            <div style={{ fontSize: 13, color: PAL.panelSoft }}>Расчётный остаток на складе</div>
             <div style={{ fontSize: 48, fontWeight: 800, letterSpacing: -2, lineHeight: 1.1, color: PAL.mint }}>
-              {stock.toLocaleString("ru-RU")} <span style={{ fontSize: 20, color: PAL.mintPale, letterSpacing: 0 }}>г</span>
+              {stock.toLocaleString("ru-RU")} <span style={{ fontSize: 20, color: PAL.panelSoft, letterSpacing: 0 }}>г</span>
             </div>
           </div>
           <div className="flex gap-1">
@@ -887,8 +947,8 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={chart} margin={{ left: -20, right: 6, top: 6 }}>
               <defs><linearGradient id="g1" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={PAL.mint} stopOpacity={.55} /><stop offset="100%" stopColor={PAL.mint} stopOpacity={0} /></linearGradient></defs>
-              <XAxis dataKey="label" tick={{ fontSize: 10, fill: PAL.mintPale }} axisLine={false} tickLine={false} interval={range > 14 ? 3 : 1} />
-              <YAxis tick={{ fontSize: 10, fill: PAL.mintPale }} axisLine={false} tickLine={false} />
+              <XAxis dataKey="label" tick={{ fontSize: 10, fill: PAL.panelSoft }} axisLine={false} tickLine={false} interval={range > 14 ? 3 : 1} />
+              <YAxis tick={{ fontSize: 10, fill: PAL.panelSoft }} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={STY.tip} formatter={(v, n) => [`${v} г`, n]} />
               <Area type="monotone" dataKey="остаток" stroke={PAL.mint} strokeWidth={2.5} fill="url(#g1)" isAnimationActive={false} />
             </AreaChart>
@@ -901,20 +961,16 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
           <Pill color={PAL.sun} light>расход ≈ {perDay || "—"} г/день</Pill>
         </div>
 
-        <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 14, background: "rgba(255,255,255,.08)" }}>
-          <div className="flex items-center gap-2 flex-wrap" style={{ fontSize: 13 }}>
-            <span style={{ color: PAL.mintPale }}>Средняя граммовка кальяна</span>
-            <input type="number" value={gramsPerBowl} onChange={(e) => setGramsPerBowl(Number(e.target.value) || 0)}
-              style={{ width: 70, borderRadius: 8, border: "none", padding: "4px 8px", fontFamily: "inherit", fontWeight: 800, textAlign: "center" }} />
-            <span style={{ color: PAL.mintPale }}>г</span>
-          </div>
-          <div style={{ marginTop: 8, fontSize: 15, fontWeight: 700 }}>
+        <div style={{ marginTop: 12, padding: "12px 14px", borderRadius: 14, background: "rgba(255,255,255,.10)" }}>
+          <div style={{ fontSize: 15, fontWeight: 700 }}>
             {daysLeft === null
-              ? <span style={{ color: PAL.mintPale }}>Заполни кальяны в сменах — посчитаю, на сколько хватит.</span>
+              ? <span style={{ color: PAL.panelSoft }}>Заполни кальяны в сменах — посчитаю, на сколько хватит.</span>
               : <>Рекомендация: хватит примерно на <span style={{ color: daysLeft < 7 ? PAL.coral : PAL.mint, fontSize: 22 }}>{daysLeft}</span> дн.
                 {daysLeft < 7 && <span style={{ color: PAL.coral }}> — пора заказывать</span>}</>}
           </div>
-          <div style={{ fontSize: 11, color: PAL.mintPale, opacity: .8, marginTop: 4 }}>Это прогноз по среднему расходу, из остатка ничего не вычитается.</div>
+          <div style={{ fontSize: 11, color: PAL.panelSoft, opacity: .75, marginTop: 4 }}>
+            Прогноз по среднему расходу из расчёта {GRAMS_PER_BOWL} г на кальян — из остатка ничего не вычитается.
+          </div>
         </div>
       </section>
 
@@ -985,32 +1041,31 @@ function TobaccoView({ setToast, ledger, setLedger, daily, inventories, setInven
       </Card>
 
       {/* ---------- ручная корректировка ---------- */}
-      <Card style={{ gridColumn: "span 4" }} title="Ручная корректировка">
-        <div className="flex gap-2 mb-3">
-          {[[1, "Добавить", PAL.mint], [-1, "Убрать", PAL.coral]].map(([dir, l, c]) => (
-            <button key={dir} onClick={() => setCorr({ ...corr, dir })}
-              style={{ flex: 1, border: `2px solid ${corr.dir === dir ? c : PAL.line}`, background: corr.dir === dir ? c + "22" : PAL.white, color: PAL.ink, borderRadius: 12, padding: "10px", fontWeight: 800, fontSize: 14, cursor: "pointer", fontFamily: "inherit" }}>{l}</button>
-          ))}
-        </div>
-        <div style={label}>Граммы</div>
-        <input type="number" min={0} value={corr.grams} placeholder="0" onChange={(e) => setCorr({ ...corr, grams: e.target.value })}
-          style={{ ...STY.input, fontSize: 20, fontWeight: 800 }} />
+      <Card style={{ gridColumn: "span 4" }} title="Ручная корректировка"
+        aside={<span style={{ fontSize: 12, color: PAL.mute }}>минус — убрать</span>}>
+        <div style={label}>Граммы: 500 добавит, −500 уберёт</div>
+        <input value={corr.grams} placeholder="например −250" onChange={(e) => setCorr({ ...corr, grams: e.target.value })}
+          style={{ ...STY.input, fontSize: 22, fontWeight: 800, color: corrG < 0 ? PAL.coral : PAL.ink }} />
         <div style={{ ...label, marginTop: 10 }}>Комментарий — почему</div>
         <input value={corr.note} placeholder="например: просыпали при забивке" onChange={(e) => setCorr({ ...corr, note: e.target.value })} style={STY.input} />
-        <div style={{ marginTop: 12 }}>
-          <Btn onClick={doCorr} disabled={!(Number(corr.grams) > 0)}>
-            Сохранить {corr.grams ? `(${corr.dir > 0 ? "+" : "−"}${corr.grams} г)` : ""}
-          </Btn>
+        <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
+          <Btn onClick={doCorr} disabled={!corrG}>Сохранить</Btn>
+          {!!corrG && <span style={{ fontSize: 14, color: PAL.mute }}>остаток станет <b style={{ color: PAL.ink }}>{stock + corrG} г</b></span>}
         </div>
       </Card>
 
       {/* ---------- продажи ---------- */}
       <Card style={{ gridColumn: "span 4" }} title="Продажи кальянов">
+        <div style={{ fontSize: 12, color: PAL.mute, marginBottom: 8, padding: "6px 10px", borderRadius: 8, background: PAL.paper }}>
+          {lastSale
+            ? <>последние продажи внесены за <b style={{ color: PAL.ink }}>{periodNote({ from: lastSale.from, to: lastSale.to })}</b></>
+            : "продажи ещё не вносились"}
+        </div>
         <div className="flex gap-2">
           <label style={{ flex: 1 }}><div style={label}>с</div>
-            <input type="date" value={salePeriod.from} onChange={(e) => setSalePeriod({ ...salePeriod, from: e.target.value })} style={STY.input} /></label>
+            <input type="date" value={salePeriod.from} onChange={(e) => { setSaleTouched(true); setSalePeriod({ ...salePeriod, from: e.target.value }); }} style={STY.input} /></label>
           <label style={{ flex: 1 }}><div style={label}>по</div>
-            <input type="date" value={salePeriod.to} onChange={(e) => setSalePeriod({ ...salePeriod, to: e.target.value })} style={STY.input} /></label>
+            <input type="date" value={salePeriod.to} onChange={(e) => { setSaleTouched(true); setSalePeriod({ ...salePeriod, to: e.target.value }); }} style={STY.input} /></label>
         </div>
         <QtyTable q={saleQty} onChange={setSaleQty} color={PAL.sky} />
         <div className="flex items-center gap-2" style={{ marginTop: 12 }}>
