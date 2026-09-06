@@ -343,9 +343,10 @@ if (BOT_TOKEN) {
   const clrS = (ctx) => sess.delete(ctx.chat.id);
 
   const menu = new Keyboard()
-    .text("💰 Касса").text("🗓 График").row()
-    .text("👥 Смены").text("📦 Склад").row()
-    .text("📄 Поставка из файла").text("👤 Сотрудники").resized();
+    .text("📊 Дэшборд").text("💰 Касса").row()
+    .text("🗓 График").text("👥 Смены").row()
+    .text("📦 Склад").text("📄 Поставка из файла").row()
+    .text("👤 Сотрудники").resized();
   const staffMenu = new Keyboard().text("🗓 Мои смены").text("✍️ Заявка на смену").resized();
 
   // /id работает всегда — им узнают свой Telegram id
@@ -423,6 +424,50 @@ if (BOT_TOKEN) {
     "• «пришла поставка табака»\n" +
     "• «продали 14 классики и 3 фрукта»\n" +
     "• «сколько табака на складе»", { reply_markup: menu }); });
+
+  // ═════════ ДЭШБОРД ═════════
+  const dashText = (s) => {
+    const today = iso(Date.now());
+    const now = new Date();
+    const mPref = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    let cash = 0, hk = 0, days = 0;
+    for (let i = 0; i < 62; i++) {
+      const d = isoAt(-i);
+      if (!d.startsWith(mPref)) continue;
+      const t = dayTotals(s, d);
+      if (!t) continue;
+      cash += t.cash; hk += t.hookahs; days++;
+    }
+    // расход табака и прогноз
+    const gone14 = s.ledger.filter((l) => l.grams < 0 && l.date >= isoAt(-14)).reduce((a, l) => a + Math.abs(l.grams), 0);
+    const perDay = Math.round(gone14 / 14);
+    const st = stockOf(s);
+    const left = perDay > 0 ? Math.floor(st / perDay) : null;
+
+    // не заполненные кассы за последние 7 дней
+    const gaps = [];
+    for (let i = 1; i <= 7; i++) {
+      const d = isoAt(-i);
+      if (!dayTotals(s, d) && (s.roster[`${d}|day`] || s.roster[`${d}|night`])) gaps.push(d);
+    }
+    const pend = (s.requests || []).filter((r) => r.status === "new");
+    const t = dayTotals(s, today);
+
+    return `📊 Дэшборд · ${ruDay(today)}\n\n` +
+      `Сегодня\n${shiftLine(s, today)}\n` +
+      (t ? `Касса: ${fmt(t.cash)} ₽ · ${t.hookahs} кальянов\n` : `Касса: не заполнена\n`) +
+      `\nМесяц\nКасса: ${fmt(cash)} ₽ · ${hk} кальянов · ${days} дн.\n` +
+      (days ? `В среднем за день: ${fmt(cash / days)} ₽ · ${(hk / days).toFixed(1)} кальянов\n` : "") +
+      `\nСклад\nОстаток: ${fmt(st)} г\nРасход: ${perDay ? `${fmt(perDay)} г/день` : "—"}` +
+      (left !== null ? ` · хватит на ${left} дн.${left < 7 ? " ⚠️" : ""}` : "") + "\n" +
+      (gaps.length ? `\n⚠️ Касса не заполнена: ${gaps.map(ruShort).join(", ")}\n` : "") +
+      (pend.length ? `✍️ Заявок на подтверждение: ${pend.length}\n` : "");
+  };
+  const dashKb = new InlineKeyboard()
+    .text("💰 Заполнить кассу", "c:pick:0").text("📦 Склад", "w:show").row()
+    .text("🗓 График", "g:0");
+
+  bot.hears("📊 Дэшборд", async (ctx) => { clrS(ctx); ctx.reply(dashText(await loadState()), { reply_markup: dashKb }); });
 
   // ═════════ КАССА ═════════
   const cashText = (s, day) => {
@@ -589,6 +634,7 @@ if (BOT_TOKEN) {
     .text("📄 Поставка из файла", "w:file");
 
   bot.hears("📦 Склад", async (ctx) => { clrS(ctx); ctx.reply(stockText(await loadState()), { reply_markup: stockKb }); });
+  bot.callbackQuery("w:show", async (ctx) => { await ctx.answerCallbackQuery(); ctx.reply(stockText(await loadState()), { reply_markup: stockKb }); });
 
   // ручная корректировка
   bot.callbackQuery("w:adj", async (ctx) => {
@@ -778,11 +824,53 @@ if (BOT_TOKEN) {
       const on = linked.some((p) => p.empId === e.id);
       kb.text(`${on ? "✅" : "➕"} ${e.name}`, `emp:${e.id}`).row();
     });
+    kb.text("➕ Добавить сотрудника", "emp:add");
     ctx.reply(s.employees.length
-      ? "Кому выдать доступ в бот? ✅ — уже подключён.\nНажми на имя, я дам код для сотрудника."
-      : "Штат пуст. Сначала добавь сотрудников — например, напиши «завтра Вова 1».", { reply_markup: kb });
+      ? "Штат. ✅ — подключён к боту.\nНажми на имя, чтобы выдать код доступа или удалить."
+      : "Штат пуст. Добавь первого сотрудника.", { reply_markup: kb });
+  });
+  bot.callbackQuery("emp:add", async (ctx) => {
+    setS(ctx, { flow: "newemp" });
+    await ctx.answerCallbackQuery();
+    ctx.reply("Как зовут нового сотрудника? Напиши имя.");
+  });
+  bot.callbackQuery(/^empdel:(.+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    const s0 = await loadState();
+    const emp = s0.employees.find((e) => e.id === id);
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText(`Удалить ${emp?.name} из штата? Смены, где он записан, останутся пустыми.`, {
+      reply_markup: new InlineKeyboard().text("🗑 Да, удалить", `empdelok:${id}`).text("Отмена", `emp:${id}`),
+    });
+  });
+  bot.callbackQuery(/^empdelok:(.+)$/, async (ctx) => {
+    const id = ctx.match[1];
+    let name = "";
+    const s = await mutate((s) => {
+      name = s.employees.find((e) => e.id === id)?.name || "";
+      s.employees = s.employees.filter((e) => e.id !== id);
+      for (const k of Object.keys(s.roster)) if (s.roster[k] === id) delete s.roster[k];
+      for (const [tg, p] of Object.entries(s.people)) if (p.empId === id) delete s.people[tg];
+    });
+    await ctx.answerCallbackQuery("Удалён");
+    ctx.editMessageText(`🗑 ${name} удалён из штата. В штате ${s.employees.length} чел.`);
   });
   bot.callbackQuery(/^emp:(.+)$/, async (ctx) => {
+    const empId = ctx.match[1];
+    const s = await loadState();
+    const emp = s.employees.find((e) => e.id === empId);
+    if (!emp) { await ctx.answerCallbackQuery(); return ctx.editMessageText("Сотрудник не найден."); }
+    const linked = Object.values(s.people).some((p) => p.empId === empId);
+    const soon = Object.entries(s.roster).filter(([k, v]) => v === empId && k.split("|")[0] >= iso(Date.now()))
+      .map(([k]) => k.split("|")).sort().slice(0, 5).map(([d, kk]) => `${ruDay(d)} · ${KIND_LABEL[kk]}`);
+    await ctx.answerCallbackQuery();
+    ctx.editMessageText(`👤 ${emp.name}\n${linked ? "Подключён к боту ✅" : "К боту не подключён"}\n\nБлижайшие смены:\n${soon.join("\n") || "—"}`, {
+      reply_markup: new InlineKeyboard()
+        .text(linked ? "🔑 Новый код доступа" : "🔑 Код доступа", `empcode:${empId}`).row()
+        .text("🗑 Удалить из штата", `empdel:${empId}`),
+    });
+  });
+  bot.callbackQuery(/^empcode:(.+)$/, async (ctx) => {
     const empId = ctx.match[1];
     const code = Math.random().toString(36).slice(2, 7).toUpperCase();
     const s = await mutate((s) => { s.invites[code] = empId; });
@@ -910,6 +998,17 @@ if (BOT_TOKEN) {
       clrS(ctx);
       return ctx.reply(`💰 Записал за ${ruDay(day)}: ${fmt(cash)} ₽ · ${hookahs} кальянов\n${shiftLine(s, day)}`,
         { reply_markup: new InlineKeyboard().text("✏️ Изменить", `c:set:${day}`).text("🗑 Удалить", `c:del:${day}`) });
+    }
+
+    if (st?.flow === "newemp") {
+      const name = text.replace(/[^\p{L}\s-]/gu, "").trim();
+      if (!name) return ctx.reply("Напиши имя словами.");
+      const s0 = await loadState();
+      if (s0.employees.some((e) => translit(e.name) === translit(name))) { clrS(ctx); return ctx.reply(`${name} уже есть в штате.`); }
+      const s = await mutate((s) => { s.employees.push({ id: uid(), name: name[0].toUpperCase() + name.slice(1), color: null }); });
+      clrS(ctx);
+      return ctx.reply(`✅ ${name[0].toUpperCase() + name.slice(1)} добавлен. В штате ${s.employees.length} чел.`,
+        { reply_markup: new InlineKeyboard().text("👥 Поставить в смену", "sh:list") });
     }
 
     if (st?.flow === "empname") {
